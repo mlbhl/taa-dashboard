@@ -2,7 +2,7 @@
 TAA Portfolio Optimizer Dashboard
 ==================================
 Peer 평균을 기준점으로, TAA 시그널 방향에 따라 틸트를 가감하여
-Peer를 이길 수 있는 Final 비중을 자동 산출합니다.
+Peer를 이길 수 있는 Final 비중을 산출
 
 Formula: Final_i = normalize( Peer_i + α × Signal_i × Tilt_i )
     Tilt_i = |SAA_i - Peer_i| × d  (d=1.0 aligned, d=0.25 opposed)
@@ -12,8 +12,6 @@ Requirements:
 
 Run:
     python taa_portfolio_optimizer.py
-
-Then open http://127.0.0.1:8050 in your browser.
 """
 
 import json
@@ -22,9 +20,7 @@ from dash import dcc, html, dash_table, Input, Output, State, callback_context
 import plotly.graph_objects as go
 import pandas as pd
 
-# ──────────────────────────────────────────────
-# 기본 데이터
-# ──────────────────────────────────────────────
+
 DEFAULT_REGIONS = [
     # 주식 70% — 내부비중(100기준): 미국70 유럽15 일본5 중국3 한국5 기타2
     {"자산": "주식", "지역": "미국", "Region": "US",     "SAA": 49.0, "Peer": 45.5, "TAA": "Neutral"},
@@ -42,9 +38,6 @@ TAA_MAP = {"Strong OW": 2, "Overweight": 1, "Neutral": 0, "Underweight": -1, "St
 REGION_COLORS = ["#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#10b981", "#f97316", "#8b5cf6", "#14b8a6"]
 
 
-# ──────────────────────────────────────────────
-# 핵심 계산 함수
-# ──────────────────────────────────────────────
 def compute_final(df: pd.DataFrame, alpha: float) -> pd.DataFrame:
     """Final 비중 계산 후 정규화
 
@@ -70,9 +63,6 @@ def compute_final(df: pd.DataFrame, alpha: float) -> pd.DataFrame:
     return df
 
 
-# ──────────────────────────────────────────────
-# Dash App
-# ──────────────────────────────────────────────
 app = dash.Dash(
     __name__,
     title="TAA Portfolio Optimizer",
@@ -107,9 +97,6 @@ label_style = {
 }
 
 
-# ──────────────────────────────────────────────
-# 레이아웃
-# ──────────────────────────────────────────────
 app.layout = html.Div(
     style={"backgroundColor": DARK_BG, "minHeight": "100vh", "padding": "30px 20px", "fontFamily": "Inter, sans-serif", "color": TEXT_MAIN},
     children=[
@@ -271,9 +258,6 @@ app.layout = html.Div(
 )
 
 
-# ──────────────────────────────────────────────
-# Callbacks
-# ──────────────────────────────────────────────
 
 # 행 추가
 @app.callback(
@@ -483,5 +467,4 @@ def update_results(rows, alpha):
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
     print("\n  TAA Portfolio Optimizer")
-    print("  http://127.0.0.1:8050\n")
     app.run(debug=True)
