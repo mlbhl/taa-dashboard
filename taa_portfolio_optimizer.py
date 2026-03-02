@@ -23,15 +23,15 @@ import pandas as pd
 
 DEFAULT_REGIONS = [
     # 주식 70% — 내부비중(100기준): 미국70 유럽15 일본5 중국3 한국5 기타2
-    {"자산": "주식", "지역": "미국", "Region": "US",     "SAA": 49.0, "Peer": 45.5, "TAA": "Neutral"},
-    {"자산": "주식", "지역": "유럽", "Region": "Europe", "SAA": 10.5, "Peer": 12.6, "TAA": "Neutral"},
-    {"자산": "주식", "지역": "일본", "Region": "Japan",  "SAA":  3.5, "Peer":  3.5, "TAA": "Neutral"},
-    {"자산": "주식", "지역": "중국", "Region": "China",  "SAA":  2.1, "Peer":  3.5, "TAA": "Neutral"},
-    {"자산": "주식", "지역": "한국", "Region": "Korea",  "SAA":  3.5, "Peer":  2.1, "TAA": "Neutral"},
-    {"자산": "주식", "지역": "기타", "Region": "Other",  "SAA":  1.4, "Peer":  2.8, "TAA": "Neutral"},
+    {"자산": "주식", "지역": "미국","SAA": 49.0, "Peer": 45.5, "TAA": "Neutral"},
+    {"자산": "주식", "지역": "유럽","SAA": 10.5, "Peer": 12.6, "TAA": "Neutral"},
+    {"자산": "주식", "지역": "일본","SAA":  3.5, "Peer":  3.5, "TAA": "Neutral"},
+    {"자산": "주식", "지역": "중국","SAA":  2.1, "Peer":  3.5, "TAA": "Neutral"},
+    {"자산": "주식", "지역": "한국","SAA":  3.5, "Peer":  2.1, "TAA": "Neutral"},
+    {"자산": "주식", "지역": "기타","SAA":  1.4, "Peer":  2.8, "TAA": "Neutral"},
     # 채권 30% — 내부비중(100기준): 미국70 한국30
-    {"자산": "채권", "지역": "미국", "Region": "US",     "SAA": 21.0, "Peer": 18.0, "TAA": "Neutral"},
-    {"자산": "채권", "지역": "한국", "Region": "Korea",  "SAA":  9.0, "Peer": 12.0, "TAA": "Neutral"},
+    {"자산": "채권", "지역": "미국","SAA": 21.0, "Peer": 18.0, "TAA": "Neutral"},
+    {"자산": "채권", "지역": "한국","SAA":  9.0, "Peer": 12.0, "TAA": "Neutral"},
 ]
 
 TAA_MAP = {"Strong OW": 2, "Overweight": 1, "Neutral": 0, "Underweight": -1, "Strong UW": -2}
@@ -68,6 +68,23 @@ app = dash.Dash(
     title="TAA Portfolio Optimizer",
     suppress_callback_exceptions=True,
 )
+
+# 드롭다운 셀 텍스트 색상을 밝게
+app.index_string = '''<!DOCTYPE html>
+<html>
+<head>{%metas%}<title>{%title%}</title>{%favicon%}{%css%}
+<style>
+.Select-value-label, .Select-placeholder, .Select-input input {
+    color: #e2e5ea !important;
+}
+.Select-menu-outer { background-color: #1a1d24 !important; }
+.Select-option { background-color: #1a1d24 !important; color: #e2e5ea !important; }
+.Select-option.is-focused { background-color: #2a2d34 !important; }
+</style>
+</head>
+<body>{%app_entry%}<footer>{%config%}{%scripts%}{%renderer%}</footer>
+</body>
+</html>'''
 
 # ── 스타일 상수 ──
 DARK_BG   = "#0d0f13"
@@ -163,7 +180,6 @@ app.layout = html.Div(
                         columns=[
                             {"name": "자산", "id": "자산", "editable": True},
                             {"name": "지역", "id": "지역", "editable": True},
-                            {"name": "Region", "id": "Region", "editable": True},
                             {"name": "SAA (%)", "id": "SAA", "type": "numeric", "editable": True},
                             {"name": "Peer (%)", "id": "Peer", "type": "numeric", "editable": True},
                             {"name": "TAA", "id": "TAA", "presentation": "dropdown", "editable": True},
@@ -199,19 +215,18 @@ app.layout = html.Div(
                         style_cell_conditional=[
                             {"if": {"column_id": "자산"}, "textAlign": "left", "fontWeight": "600", "color": ACCENT},
                             {"if": {"column_id": "지역"}, "textAlign": "left", "fontWeight": "600"},
-                            {"if": {"column_id": "Region"}, "textAlign": "left", "color": TEXT_DIM},
                         ],
                         style_data_conditional=[
                             {"if": {"filter_query": '{TAA} = "Strong OW"', "column_id": "TAA"},
-                             "color": GREEN, "fontWeight": "700", "backgroundColor": "rgba(16,185,129,0.12)"},
+                             "color": "#34d399", "fontWeight": "700"},
                             {"if": {"filter_query": '{TAA} = "Overweight"', "column_id": "TAA"},
-                             "color": GREEN, "fontWeight": "600"},
+                             "color": "#34d399", "fontWeight": "600"},
                             {"if": {"filter_query": '{TAA} = "Neutral"', "column_id": "TAA"},
-                             "color": "#94a3b8"},
+                             "color": TEXT_MAIN},
                             {"if": {"filter_query": '{TAA} = "Underweight"', "column_id": "TAA"},
-                             "color": RED, "fontWeight": "600"},
+                             "color": "#f87171", "fontWeight": "600"},
                             {"if": {"filter_query": '{TAA} = "Strong UW"', "column_id": "TAA"},
-                             "color": RED, "fontWeight": "700", "backgroundColor": "rgba(239,68,68,0.12)"},
+                             "color": "#f87171", "fontWeight": "700"},
                         ],
                     ),
                     html.Br(),
@@ -267,7 +282,7 @@ app.layout = html.Div(
     prevent_initial_call=True,
 )
 def add_row(n_clicks, rows):
-    rows.append({"자산": "주식", "지역": "신규", "Region": "New", "SAA": 0, "Peer": 0, "TAA": "Neutral"})
+    rows.append({"자산": "주식", "지역": "신규", "SAA": 0, "Peer": 0, "TAA": "Neutral"})
     return rows
 
 
@@ -323,8 +338,6 @@ def update_results(rows, alpha):
                     "padding": "16px 12px",
                     "textAlign": "center",
                     "borderTop": f"3px solid {colors[i]}",
-                    "flex": "1",
-                    "minWidth": "100px",
                 },
                 children=[
                     html.Div(row["Label"], style={"fontSize": "14px", "color": TEXT_DIM, "marginBottom": "4px"}),
@@ -339,15 +352,24 @@ def update_results(rows, alpha):
                 ],
             )
         )
-    result_cards = html.Div(style={"display": "flex", "gap": "12px", "flexWrap": "wrap"}, children=cards)
+    result_cards = html.Div(style={"display": "grid", "gridTemplateColumns": f"repeat({n}, 1fr)", "gap": "12px"}, children=cards)
 
     # ── 2) Comparison Chart ──
     fig = go.Figure()
     fig.add_trace(go.Bar(
+        name="SAA",
+        x=result["Label"],
+        y=result["SAA"],
+        marker_color="#4b5563",
+        text=result["SAA"].apply(lambda v: f"{v:.1f}%"),
+        textposition="inside",
+        textfont=dict(size=12, family="monospace", color="white"),
+    ))
+    fig.add_trace(go.Bar(
         name="Peer",
         x=result["Label"],
         y=result["Peer"],
-        marker_color=[f"rgba({int(c[1:3],16)},{int(c[3:5],16)},{int(c[5:7],16)},0.5)" for c in colors],
+        marker_color="#6b7280",
         text=result["Peer"].apply(lambda v: f"{v:.1f}%"),
         textposition="inside",
         textfont=dict(size=12, family="monospace", color="white"),
@@ -356,7 +378,7 @@ def update_results(rows, alpha):
         name="Final",
         x=result["Label"],
         y=result["Final"],
-        marker_color=colors,
+        marker_color=ACCENT,
         text=result["Final"].apply(lambda v: f"{v:.1f}%"),
         textposition="inside",
         textfont=dict(size=12, family="monospace", color="white"),
