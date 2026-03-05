@@ -54,7 +54,7 @@ def compute_final(df: pd.DataFrame, alpha: float) -> pd.DataFrame:
 
     df["Adj"] = alpha * df["Signal"] * df["Tilt"]
     df["Raw"] = df["Peer"] + df["Adj"]
-    df["Raw"] = df["Raw"].clip(lower=0.5)  # floor
+    df["Raw"] = df["Raw"].clip(lower=1.0)  # floor
 
     total = df["Raw"].sum()
     df["Final"] = (df["Raw"] / total * 100).round(2)
@@ -152,18 +152,6 @@ app.layout = html.Div(
                             html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px", "color": "#4b5563"}, children=[
                                 html.Span("보수적"), html.Span("적극적"),
                             ]),
-                        ]),
-                        # Tilt description
-                        html.Div([
-                            html.Div("Tilt 방식", style={"fontSize": "15px", "color": "#94a3b8", "marginBottom": "6px"}),
-                            html.Div(
-                                "Tilt = |SAA − Peer| × d",
-                                style={"fontSize": "14px", "color": TEXT_MAIN, "fontFamily": "monospace", "lineHeight": "1.6"},
-                            ),
-                            html.Div(
-                                "d=1.0 Peer→SAA 방향 틸트 (적극) / d=0.25 반대 방향 (억제)",
-                                style={"fontSize": "13px", "color": TEXT_DIM, "lineHeight": "1.6"},
-                            ),
                         ]),
                     ]),
                 ]),
@@ -442,12 +430,12 @@ def update_results(rows, alpha):
     ])
 
     # ── 4) Detail Table ──
-    detail_cols = ["자산", "지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Final", "vs_Peer"] if "자산" in result.columns else ["지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Final", "vs_Peer"]
+    detail_cols = ["자산", "지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Raw", "Final", "vs_Peer"] if "자산" in result.columns else ["지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Raw", "Final", "vs_Peer"]
     detail_df = result[detail_cols].copy()
-    rename = {"SAA": "SAA(%)", "Peer": "Peer(%)", "Signal": "Signal", "Tilt": "Tilt(%p)", "Adj": "Adj(%p)", "Final": "Final(%)", "vs_Peer": "vs Peer(%p)"}
+    rename = {"SAA": "SAA(%)", "Peer": "Peer(%)", "Signal": "Signal", "Tilt": "Tilt(%p)", "Adj": "Adj(%p)", "Raw": "Raw(%)", "Final": "Final(%)", "vs_Peer": "vs Peer(%p)"}
     detail_df = detail_df.rename(columns=rename)
 
-    for c in ["Tilt(%p)", "Adj(%p)", "Final(%)", "vs Peer(%p)"]:
+    for c in ["Tilt(%p)", "Adj(%p)", "Raw(%)", "Final(%)", "vs Peer(%p)"]:
         use_sign = "vs" in c or "Adj" in c
         detail_df[c] = detail_df[c].apply(lambda v, s=use_sign: f"{v:+.2f}" if s else f"{v:.2f}")
 
@@ -474,9 +462,9 @@ def update_results(rows, alpha):
         html.Div([html.Span("1. ", style={"color": ACCENT}), "Raw_i = Peer_i + α × Signal_i × Tilt_i"]),
         html.Div([html.Span("2. ", style={"color": ACCENT}), "Tilt_i = |SAA_i − Peer_i| × d_i"]),
         html.Div([html.Span("   ", style={"color": ACCENT}), "d = 1.0 (Peer→SAA 방향 틸트) / 0.25 (Peer→SAA 반대 방향 틸트)"]),
-        html.Div([html.Span("3. ", style={"color": ACCENT}), "Final_i = max(Raw_i, 0.5) / Σ max(Raw_j, 0.5) × 100"]),
+        html.Div([html.Span("3. ", style={"color": ACCENT}), "Final_i = max(Raw_i, 1.0) / Σ max(Raw_j, 1.0) × 100"]),
         html.Div(
-            f"α = {alpha:.2f} | TAA: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2 | Floor = 0.5%",
+            f"α = {alpha:.2f} | TAA: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2 | Floor = 1.0%",
             style={"marginTop": "8px", "fontSize": "13px", "color": "#4b5563"},
         ),
     ]
