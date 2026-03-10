@@ -38,19 +38,21 @@ TAA_MAP = {"Strong OW": 2, "Overweight": 1, "Neutral": 0, "Underweight": -1, "St
 REGION_COLORS = ["#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#10b981", "#f97316", "#8b5cf6", "#14b8a6"]
 
 
-def compute_final(df: pd.DataFrame, alpha: float) -> pd.DataFrame:
+def compute_final(df: pd.DataFrame, alpha: float, damping_opposed: float = 0.25, min_tilt_rate: float = 0.20) -> pd.DataFrame:
     """Final 비중 계산 후 정규화
 
     비대칭 Tilt: Signal 방향이 SAA 쪽이면 적극적(×1.0),
-    SAA 반대 쪽이면 억제(×0.25)하여 SAA 앵커 효과를 구현.
+    SAA 반대 쪽이면 억제(×damping_opposed)하여 SAA 앵커 효과를 구현.
+    min_tilt_rate: gap=0일 때도 최소 Tilt = Peer × min_tilt_rate 보장.
     """
     df = df.copy()
     df["Signal"] = df["TAA"].map(TAA_MAP).fillna(0).astype(float)
 
     gap = df["SAA"] - df["Peer"]
     aligned = df["Signal"] * gap >= 0          # Signal이 SAA 쪽으로 향하는가
-    damping = aligned * 0.75 + 0.25            # aligned=1.0, opposed=0.25
-    df["Tilt"] = gap.abs() * damping
+    damping = aligned * (1.0 - damping_opposed) + damping_opposed
+    min_tilt = df["Peer"] * min_tilt_rate
+    df["Tilt"] = (gap.abs() * damping).clip(lower=min_tilt)
 
     df["Adj"] = alpha * df["Signal"] * df["Tilt"]
     df["Raw"] = df["Peer"] + df["Adj"]
@@ -59,6 +61,11 @@ def compute_final(df: pd.DataFrame, alpha: float) -> pd.DataFrame:
     total = df["Raw"].sum()
     df["Final"] = (df["Raw"] / total * 100).round(2)
     df["vs_Peer"] = (df["Final"] - df["Peer"]).round(2)
+
+    # 디폴트 범위: Final ≥ 10%이면 ±5%p, 미만이면 ±2.5%p (비음수)
+    half_w = df["Final"].apply(lambda v: 5.0 if v >= 10 else 2.5)
+    df["Final_Low"] = (df["Final"] - half_w).clip(lower=0.0).round(2)
+    df["Final_High"] = (df["Final"] + half_w).round(2)
 
     return df
 
@@ -124,18 +131,14 @@ app.layout = html.Div(
                 html.Div([
                     html.H1(
                         "TAA Portfolio Optimizer",
-                        style={"fontSize": "28px", "fontWeight": "700", "margin": "0 0 4px 0", "letterSpacing": "-0.5px"},
-                    ),
-                    html.P(
-                        "Final = Peer + α × Signal × Tilt  →  normalized to 100%",
-                        style={"fontSize": "15px", "color": TEXT_DIM, "margin": 0},
+                        style={"fontSize": "28px", "fontWeight": "700", "margin": "0", "letterSpacing": "-0.5px"},
                     ),
                 ], style={"marginBottom": "28px"}),
 
                 # ── Parameters ──
                 html.Div(style=card_style, children=[
                     html.Div("Parameters", style=label_style),
-                    html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "24px", "alignItems": "start"}, children=[
+                    html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr 1fr", "gap": "24px", "alignItems": "start"}, children=[
                         # Alpha slider
                         html.Div([
                             html.Div(style={"display": "flex", "justifyContent": "space-between", "marginBottom": "4px"}, children=[
@@ -151,6 +154,40 @@ app.layout = html.Div(
                             ),
                             html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px", "color": "#4b5563"}, children=[
                                 html.Span("보수적"), html.Span("적극적"),
+                            ]),
+                        ]),
+                        # Damping slider
+                        html.Div([
+                            html.Div(style={"display": "flex", "justifyContent": "space-between", "marginBottom": "4px"}, children=[
+                                html.Span("Damping (반대방향 억제)", style={"fontSize": "15px", "color": "#94a3b8"}),
+                                html.Span(id="damping-display", style={"fontSize": "18px", "fontWeight": "600", "fontFamily": "monospace", "color": ACCENT}),
+                            ]),
+                            dcc.Slider(
+                                id="damping-slider", min=0, max=1, step=0.05, value=0.25,
+                                marks={0: {"label": "0.0", "style": {"color": TEXT_DIM, "fontSize": "12px"}},
+                                       0.25: {"label": "0.25", "style": {"color": TEXT_DIM, "fontSize": "12px"}},
+                                       1: {"label": "1.0", "style": {"color": TEXT_DIM, "fontSize": "12px"}}},
+                                tooltip={"placement": "bottom", "always_visible": False},
+                            ),
+                            html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px", "color": "#4b5563"}, children=[
+                                html.Span("강한 억제"), html.Span("억제 없음"),
+                            ]),
+                        ]),
+                        # Min Tilt Rate slider
+                        html.Div([
+                            html.Div(style={"display": "flex", "justifyContent": "space-between", "marginBottom": "4px"}, children=[
+                                html.Span("Min Tilt Rate", style={"fontSize": "15px", "color": "#94a3b8"}),
+                                html.Span(id="mintilt-display", style={"fontSize": "18px", "fontWeight": "600", "fontFamily": "monospace", "color": ACCENT}),
+                            ]),
+                            dcc.Slider(
+                                id="mintilt-slider", min=0, max=0.5, step=0.05, value=0.20,
+                                marks={0: {"label": "0%", "style": {"color": TEXT_DIM, "fontSize": "12px"}},
+                                       0.2: {"label": "20%", "style": {"color": TEXT_DIM, "fontSize": "12px"}},
+                                       0.5: {"label": "50%", "style": {"color": TEXT_DIM, "fontSize": "12px"}}},
+                                tooltip={"placement": "bottom", "always_visible": False},
+                            ),
+                            html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px", "color": "#4b5563"}, children=[
+                                html.Span("최소 보장 없음"), html.Span("Peer의 50%"),
                             ]),
                         ]),
                     ]),
@@ -230,6 +267,29 @@ app.layout = html.Div(
                     ),
                 ]),
 
+                # ── Range Confirmation ──
+                html.Div(style=card_style, children=[
+                    html.Div("Range Confirmation", style=label_style),
+                    html.Div(
+                        "디폴트 범위는 Final 값의 ±5% (최소 ±0.3%p)로 자동 설정됩니다. Low/High를 수기로 조정하여 확정하세요.",
+                        style={"fontSize": "14px", "color": TEXT_DIM, "marginBottom": "12px"},
+                    ),
+                    html.Div(id="range-table-container"),
+                    html.Br(),
+                    html.Button(
+                        "범위 확정",
+                        id="confirm-range-btn",
+                        n_clicks=0,
+                        style={
+                            "backgroundColor": ACCENT, "color": "white", "border": "none",
+                            "borderRadius": "6px", "padding": "10px 24px", "fontSize": "14px",
+                            "cursor": "pointer", "fontWeight": "700",
+                        },
+                    ),
+                    html.Div(id="range-status", style={"display": "inline-block", "marginLeft": "12px", "fontSize": "14px", "color": GREEN}),
+                    dcc.Store(id="confirmed-range-store", data=None),
+                ]),
+
                 # ── Results ──
                 html.Div(style=card_style, children=[
                     html.Div("Final Allocation", style=label_style),
@@ -274,10 +334,96 @@ def add_row(n_clicks, rows):
     return rows
 
 
-# Alpha 표시
+# 파라미터 표시
 @app.callback(Output("alpha-display", "children"), Input("alpha-slider", "value"))
 def update_alpha_display(val):
     return f"{val:.2f}"
+
+@app.callback(Output("damping-display", "children"), Input("damping-slider", "value"))
+def update_damping_display(val):
+    return f"{val:.2f}"
+
+@app.callback(Output("mintilt-display", "children"), Input("mintilt-slider", "value"))
+def update_mintilt_display(val):
+    return f"{val:.0%}"
+
+
+# ── Range Table 렌더링 (입력 변경 시 디폴트 범위 재생성) ──
+@app.callback(
+    [
+        Output("range-table-container", "children"),
+        Output("confirmed-range-store", "data"),
+        Output("range-status", "children"),
+    ],
+    [
+        Input("region-table", "data"),
+        Input("alpha-slider", "value"),
+        Input("damping-slider", "value"),
+        Input("mintilt-slider", "value"),
+    ],
+)
+def update_range_table(rows, alpha, damping_opposed, min_tilt_rate):
+    if not rows:
+        return html.Div("데이터를 입력하세요.", style={"color": TEXT_DIM}), None, ""
+
+    df = pd.DataFrame(rows)
+    for col in ["SAA", "Peer"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df["TAA"] = df["TAA"].fillna("Neutral")
+
+    result = compute_final(df, alpha, damping_opposed, min_tilt_rate)
+    if "자산" in result.columns:
+        result["Label"] = result["자산"] + " " + result["지역"]
+    else:
+        result["Label"] = result["지역"]
+
+    range_data = result[["Label", "Final", "Final_Low", "Final_High"]].to_dict("records")
+
+    range_table = dash_table.DataTable(
+        id="range-table",
+        columns=[
+            {"name": "자산/지역", "id": "Label", "editable": False},
+            {"name": "Final (%)", "id": "Final", "type": "numeric", "editable": False},
+            {"name": "Low (%)", "id": "Final_Low", "type": "numeric", "editable": True},
+            {"name": "High (%)", "id": "Final_High", "type": "numeric", "editable": True},
+        ],
+        data=range_data,
+        style_header={
+            "backgroundColor": "#1a1d24", "color": "#94a3b8", "fontWeight": "600",
+            "fontSize": "13px", "fontFamily": "monospace", "border": "none",
+            "borderBottom": f"1px solid {CARD_BD}",
+        },
+        style_cell={
+            "backgroundColor": CARD_BG, "color": TEXT_MAIN, "border": "none",
+            "borderBottom": "1px solid #1a1d24", "fontSize": "14px", "fontFamily": "monospace",
+            "padding": "10px 12px", "textAlign": "center",
+        },
+        style_cell_conditional=[
+            {"if": {"column_id": "Label"}, "textAlign": "left", "fontWeight": "600", "fontFamily": "Inter, sans-serif"},
+        ],
+        style_data_conditional=[
+            {"if": {"column_id": "Final_Low"}, "backgroundColor": "#1a1d24", "color": "#facc15"},
+            {"if": {"column_id": "Final_High"}, "backgroundColor": "#1a1d24", "color": "#facc15"},
+        ],
+    )
+    # 입력 변경 시 확정 상태 리셋
+    return range_table, None, ""
+
+
+# ── 범위 확정 버튼 ──
+@app.callback(
+    [
+        Output("confirmed-range-store", "data", allow_duplicate=True),
+        Output("range-status", "children", allow_duplicate=True),
+    ],
+    Input("confirm-range-btn", "n_clicks"),
+    State("range-table", "data"),
+    prevent_initial_call=True,
+)
+def confirm_range(n_clicks, range_data):
+    if not range_data:
+        return None, ""
+    return range_data, "✓ 범위가 확정되었습니다"
 
 
 # ── 메인 계산 & 렌더링 ──
@@ -292,9 +438,12 @@ def update_alpha_display(val):
     [
         Input("region-table", "data"),
         Input("alpha-slider", "value"),
+        Input("damping-slider", "value"),
+        Input("mintilt-slider", "value"),
+        Input("confirmed-range-store", "data"),
     ],
 )
-def update_results(rows, alpha):
+def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range):
     if not rows:
         empty = html.Div("데이터를 입력하세요.", style={"color": TEXT_DIM})
         return empty, go.Figure(), empty, empty, ""
@@ -304,16 +453,26 @@ def update_results(rows, alpha):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["TAA"] = df["TAA"].fillna("Neutral")
 
-    result = compute_final(df, alpha)
+    result = compute_final(df, alpha, damping_opposed, min_tilt_rate)
     # 자산+지역 라벨 (차트/카드 표시용)
     if "자산" in result.columns:
         result["Label"] = result["자산"] + " " + result["지역"]
     else:
         result["Label"] = result["지역"]
+
+    # 확정된 범위 반영 (있으면 수기값 사용, 없으면 디폴트)
+    if confirmed_range:
+        cr = {r["Label"]: r for r in confirmed_range}
+        for i, row in result.iterrows():
+            lbl = row["Label"]
+            if lbl in cr:
+                result.at[i, "Final_Low"] = float(cr[lbl].get("Final_Low", row["Final_Low"]))
+                result.at[i, "Final_High"] = float(cr[lbl].get("Final_High", row["Final_High"]))
+
     n = len(result)
     colors = REGION_COLORS[:n]
 
-    # ── 1) Result Cards ──
+    # ── 1) Result Cards (범위 포함) ──
     cards = []
     for i, row in result.iterrows():
         diff = row["vs_Peer"]
@@ -333,6 +492,10 @@ def update_results(rows, alpha):
                         html.Span(f"{row['Final']:.1f}", style={"fontSize": "32px", "fontWeight": "700", "fontFamily": "monospace"}),
                         html.Span("%", style={"fontSize": "16px", "color": TEXT_DIM}),
                     ]),
+                    html.Div(
+                        f"({row['Final_Low']:.1f} – {row['Final_High']:.1f}%)",
+                        style={"fontSize": "13px", "fontFamily": "monospace", "color": "#facc15", "marginTop": "2px"},
+                    ),
                     html.Div(
                         f"vs Peer {'+' if diff > 0 else ''}{diff:.1f}%p",
                         style={"fontSize": "14px", "fontFamily": "monospace", "fontWeight": "600", "color": diff_color, "marginTop": "4px"},
@@ -370,6 +533,15 @@ def update_results(rows, alpha):
         text=result["Final"].apply(lambda v: f"{v:.1f}%"),
         textposition="inside",
         textfont=dict(size=12, family="monospace", color="white"),
+        error_y=dict(
+            type="data",
+            symmetric=False,
+            array=(result["Final_High"] - result["Final"]).tolist(),
+            arrayminus=(result["Final"] - result["Final_Low"]).tolist(),
+            color="#facc15",
+            thickness=2,
+            width=4,
+        ),
     ))
     fig.update_layout(
         barmode="group",
@@ -430,12 +602,12 @@ def update_results(rows, alpha):
     ])
 
     # ── 4) Detail Table ──
-    detail_cols = ["자산", "지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Raw", "Final", "vs_Peer"] if "자산" in result.columns else ["지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Raw", "Final", "vs_Peer"]
+    detail_cols = ["자산", "지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Raw", "Final", "Final_Low", "Final_High", "vs_Peer"] if "자산" in result.columns else ["지역", "SAA", "Peer", "TAA", "Signal", "Tilt", "Adj", "Raw", "Final", "Final_Low", "Final_High", "vs_Peer"]
     detail_df = result[detail_cols].copy()
-    rename = {"SAA": "SAA(%)", "Peer": "Peer(%)", "Signal": "Signal", "Tilt": "Tilt(%p)", "Adj": "Adj(%p)", "Raw": "Raw(%)", "Final": "Final(%)", "vs_Peer": "vs Peer(%p)"}
+    rename = {"SAA": "SAA(%)", "Peer": "Peer(%)", "Signal": "Signal", "Tilt": "Tilt(%p)", "Adj": "Adj(%p)", "Raw": "Raw(%)", "Final": "Final(%)", "Final_Low": "Low(%)", "Final_High": "High(%)", "vs_Peer": "vs Peer(%p)"}
     detail_df = detail_df.rename(columns=rename)
 
-    for c in ["Tilt(%p)", "Adj(%p)", "Raw(%)", "Final(%)", "vs Peer(%p)"]:
+    for c in ["Tilt(%p)", "Adj(%p)", "Raw(%)", "Final(%)", "Low(%)", "High(%)", "vs Peer(%p)"]:
         use_sign = "vs" in c or "Adj" in c
         detail_df[c] = detail_df[c].apply(lambda v, s=use_sign: f"{v:+.2f}" if s else f"{v:.2f}")
 
@@ -459,12 +631,15 @@ def update_results(rows, alpha):
 
     # ── 5) Formula ──
     formula = [
-        html.Div([html.Span("1. ", style={"color": ACCENT}), "Raw_i = Peer_i + α × Signal_i × Tilt_i"]),
-        html.Div([html.Span("2. ", style={"color": ACCENT}), "Tilt_i = |SAA_i − Peer_i| × d_i"]),
-        html.Div([html.Span("   ", style={"color": ACCENT}), "d = 1.0 (Peer→SAA 방향 틸트) / 0.25 (Peer→SAA 반대 방향 틸트)"]),
-        html.Div([html.Span("3. ", style={"color": ACCENT}), "Final_i = max(Raw_i, 1.0) / Σ max(Raw_j, 1.0) × 100"]),
+        html.Div([html.Span("1. ", style={"color": ACCENT}), "Signal_i = TAA 의견의 수치 변환 (SOW=+2, OW=+1, N=0, UW=−1, SUW=−2)"]),
+        html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = max( |SAA_i − Peer_i| × d_i,  Peer_i × {min_tilt_rate:.0%} )"]),
+        html.Div([html.Span("   ", style={"color": ACCENT}), f"d_i = 1.0 (Signal이 SAA 방향)  /  {damping_opposed:.2f} (Signal이 SAA 반대 방향)"]),
+        html.Div([html.Span("3. ", style={"color": ACCENT}), "Adj_i = α × Signal_i × Tilt_i"]),
+        html.Div([html.Span("4. ", style={"color": ACCENT}), "Raw_i = max( Peer_i + Adj_i,  1.0 )"]),
+        html.Div([html.Span("5. ", style={"color": ACCENT}), "Final_i = Raw_i / Σ Raw_j × 100"]),
+        html.Div([html.Span("6. ", style={"color": ACCENT}), "Range: Final ≥ 10% → ±5%p,  Final < 10% → ±2.5%p  (수기 조정 가능)"]),
         html.Div(
-            f"α = {alpha:.2f} | TAA: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2 | Floor = 1.0%",
+            f"α = {alpha:.2f} | Damping = {damping_opposed:.2f} | Min Tilt Rate = {min_tilt_rate:.0%} | Floor = 1.0%",
             style={"marginTop": "8px", "fontSize": "13px", "color": "#4b5563"},
         ),
     ]
