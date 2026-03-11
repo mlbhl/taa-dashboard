@@ -4,7 +4,8 @@ TAA Portfolio Optimizer Dashboard
 두 가지 모드로 Final 비중을 산출:
 
 [Peer 기준] Final_i = normalize( Peer_i + α × Signal_i × Tilt_i )
-    Tilt_i = |SAA_i - Peer_i| × d  (d=1.0 aligned, d=damping opposed)
+    Tilt_i = max( |SAA_i - Peer_i| × d,  Peer_i × min_tilt_rate )
+    d = 1.0 (aligned) / damping (opposed)
 
 [가중 평균 기준] Final_i = normalize( Base_i + α × Signal_i × Tilt_i )
     Base_i = w × SAA_i + (1-w) × Peer_i
@@ -17,7 +18,6 @@ Run:
     python taa_portfolio_optimizer.py
 """
 
-import json
 import dash
 from dash import dcc, html, dash_table, Input, Output, State, callback_context
 import plotly.graph_objects as go
