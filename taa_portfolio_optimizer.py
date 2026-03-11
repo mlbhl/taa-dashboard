@@ -1,5 +1,5 @@
 """
-TAA Dashboard Dashboard
+TAA Dashboard
 ==================================
 두 가지 모드로 Final 비중을 산출:
 
