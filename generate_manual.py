@@ -135,6 +135,7 @@ pdf.mono("  Final_i = Raw_i / Sum(Raw_j) * 100")
 pdf.ln(1)
 
 pdf.sub_title("Step 6. Range (범위)")
+pdf.mono("  Final >= 20% -> +/- 7.5%p")
 pdf.mono("  Final >= 10% -> +/- 5%p")
 pdf.mono("  Final <  10% -> +/- 2.5%p")
 pdf.body(
@@ -399,7 +400,7 @@ pdf.ln(1)
 pdf.sub_title("Range Confirmation")
 pdf.body(
     "• Final 값의 크기에 따라 디폴트 범위(Low/High)가 자동 생성\n"
-    "  - Final >= 10%: ±5%p / Final < 10%: ±2.5%p\n"
+    "  - Final >= 20%: ±7.5%p / Final >= 10%: ±5%p / Final < 10%: ±2.5%p\n"
     "• Low/High 셀을 수기로 조정 가능\n"
     "• '범위 확정' 버튼 클릭으로 확정\n"
     "• 입력(SAA/Peer/TAA/α/모드 등)이 변경되면 자동으로 리셋"

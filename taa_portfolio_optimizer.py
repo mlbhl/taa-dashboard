@@ -65,8 +65,8 @@ def compute_final(df: pd.DataFrame, alpha: float, damping_opposed: float = 0.25,
     df["Final"] = (df["Raw"] / total * 100).round(2)
     df["vs_Peer"] = (df["Final"] - df["Peer"]).round(2)
 
-    # 디폴트 범위: Final ≥ 10%이면 ±5%p, 미만이면 ±2.5%p (비음수)
-    half_w = df["Final"].apply(lambda v: 5.0 if v >= 10 else 2.5)
+    # 디폴트 범위: Final ≥ 20% → ±7.5%p, ≥ 10% → ±5%p, < 10% → ±2.5%p (비음수)
+    half_w = df["Final"].apply(lambda v: 7.5 if v >= 20 else 5.0 if v >= 10 else 2.5)
     df["Final_Low"] = (df["Final"] - half_w).clip(lower=0.0).round(2)
     df["Final_High"] = (df["Final"] + half_w).round(2)
 
@@ -95,7 +95,7 @@ def compute_final_weighted(df: pd.DataFrame, alpha: float, saa_weight: float = 0
     df["Final"] = (df["Raw"] / total * 100).round(2)
     df["vs_Peer"] = (df["Final"] - df["Peer"]).round(2)
 
-    half_w = df["Final"].apply(lambda v: 5.0 if v >= 10 else 2.5)
+    half_w = df["Final"].apply(lambda v: 7.5 if v >= 20 else 5.0 if v >= 10 else 2.5)
     df["Final_Low"] = (df["Final"] - half_w).clip(lower=0.0).round(2)
     df["Final_High"] = (df["Final"] + half_w).round(2)
 
@@ -436,7 +436,7 @@ app.layout = html.Div(
                 html.Div(style=card_style, children=[
                     html.Div("Range Confirmation", style=label_style),
                     html.Div(
-                        "디폴트 범위는 Final ≥ 10%이면 ±5%p, < 10%이면 ±2.5%p로 자동 설정됩니다. Low/High를 수기로 조정하여 확정하세요.",
+                        "디폴트 범위는 Final ≥ 20%이면 ±7.5%p, ≥ 10%이면 ±5%p, < 10%이면 ±2.5%p로 자동 설정됩니다. Low/High를 수기로 조정하여 확정하세요.",
                         style={"fontSize": "14px", "color": TEXT_DIM, "marginBottom": "12px"},
                     ),
                     html.Div(id="range-table-container"),
@@ -847,7 +847,7 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
             html.Div([html.Span("3. ", style={"color": ACCENT}), "Adj_i = α × Signal_i × Tilt_i"]),
             html.Div([html.Span("4. ", style={"color": ACCENT}), "Raw_i = max( Peer_i + Adj_i,  1.0 )"]),
             html.Div([html.Span("5. ", style={"color": ACCENT}), "Final_i = Raw_i / Σ Raw_j × 100"]),
-            html.Div([html.Span("6. ", style={"color": ACCENT}), "Range: Final ≥ 10% → ±5%p,  Final < 10% → ±2.5%p  (수기 조정 가능)"]),
+            html.Div([html.Span("6. ", style={"color": ACCENT}), "Range: Final ≥ 20% → ±7.5%p,  ≥ 10% → ±5%p,  < 10% → ±2.5%p  (수기 조정 가능)"]),
             html.Div(
                 f"α = {alpha:.2f} | Damping = {damping_opposed:.2f} | Min Tilt Rate = {min_tilt_rate:.0%} | Floor = 1.0%",
                 style={"marginTop": "8px", "fontSize": "13px", "color": "#94a3b8"},
@@ -861,7 +861,7 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
             html.Div([html.Span("4. ", style={"color": ACCENT}), "Adj_i = α × Signal_i × Tilt_i"]),
             html.Div([html.Span("5. ", style={"color": ACCENT}), "Raw_i = max( Base_i + Adj_i,  1.0 )"]),
             html.Div([html.Span("6. ", style={"color": ACCENT}), "Final_i = Raw_i / Σ Raw_j × 100"]),
-            html.Div([html.Span("7. ", style={"color": ACCENT}), "Range: Final ≥ 10% → ±5%p,  Final < 10% → ±2.5%p  (수기 조정 가능)"]),
+            html.Div([html.Span("7. ", style={"color": ACCENT}), "Range: Final ≥ 20% → ±7.5%p,  ≥ 10% → ±5%p,  < 10% → ±2.5%p  (수기 조정 가능)"]),
             html.Div(
                 f"α = {alpha:.2f} | SAA Weight = {saa_weight:.2f} | Tilt Rate = {tilt_rate:.0%} | Floor = 1.0%",
                 style={"marginTop": "8px", "fontSize": "13px", "color": "#94a3b8"},
