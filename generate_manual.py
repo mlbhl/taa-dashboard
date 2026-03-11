@@ -69,7 +69,7 @@ pdf.add_page()
 
 # ── Title ──
 pdf.set_font("ng", "B", 18)
-pdf.cell(0, 12, "TAA Portfolio Optimizer - 매뉴얼", new_x="LMARGIN", new_y="NEXT")
+pdf.cell(0, 12, "TAA Dashboard - 매뉴얼", new_x="LMARGIN", new_y="NEXT")
 pdf.ln(4)
 
 # ── 1. 핵심 아이디어 ──

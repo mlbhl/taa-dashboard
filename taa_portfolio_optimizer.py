@@ -1,5 +1,5 @@
 """
-TAA Portfolio Optimizer Dashboard
+TAA Dashboard Dashboard
 ==================================
 두 가지 모드로 Final 비중을 산출:
 
@@ -104,7 +104,7 @@ def compute_final_weighted(df: pd.DataFrame, alpha: float, saa_weight: float = 0
 
 app = dash.Dash(
     __name__,
-    title="TAA Portfolio Optimizer",
+    title="TAA Dashboard",
     suppress_callback_exceptions=True,
 )
 server = app.server
@@ -240,7 +240,7 @@ app.layout = html.Div(
                 # ── Header ──
                 html.Div([
                     html.H1(
-                        "TAA Portfolio Optimizer",
+                        "TAA Dashboard",
                         style={"fontSize": "28px", "fontWeight": "700", "margin": "0", "letterSpacing": "-0.5px"},
                     ),
                 ], style={"marginBottom": "28px"}),
@@ -875,5 +875,5 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
 # Run
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n  TAA Portfolio Optimizer")
+    print("\n  TAA Dashboard")
     app.run(debug=True)
