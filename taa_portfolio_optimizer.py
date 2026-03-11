@@ -107,6 +107,7 @@ app = dash.Dash(
     title="TAA Portfolio Optimizer",
     suppress_callback_exceptions=True,
 )
+server = app.server
 
 # 드롭다운 & 입력 UX 개선
 app.index_string = '''<!DOCTYPE html>
