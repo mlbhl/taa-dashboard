@@ -211,8 +211,8 @@ def build_peer_sheet(wb):
         ws.cell(row=r, column=10).value = f"=E{r}*{mintilt_ref}"
         ws.cell(row=r, column=10).number_format = "0.00"
 
-        # Tilt = MAX(ABS(Gap) * Damping, Min Tilt)
-        ws.cell(row=r, column=11).value = f"=MAX(ABS(G{r})*I{r}, J{r})"
+        # Tilt = IF(Gap=0, Min Tilt, ABS(Gap) * Damping)
+        ws.cell(row=r, column=11).value = f"=IF(G{r}=0, J{r}, ABS(G{r})*I{r})"
         ws.cell(row=r, column=11).number_format = "0.00"
 
         # Adj = α * Signal * Tilt
@@ -305,7 +305,7 @@ def build_peer_sheet(wb):
         "2. Gap_i = SAA_i - Peer_i",
         "3. Aligned = 1 if Signal×Gap ≥ 0, else 0",
         "4. Damping_i = Aligned × (1 - d) + d    (d = Damping 파라미터)",
-        "5. Tilt_i = MAX( |Gap_i| × Damping_i,  Peer_i × Min Tilt Rate )",
+        "5. Tilt_i = |Gap_i| × Damping_i  (gap=0이면 Peer_i × Min Tilt Rate)",
         "6. Adj_i = α × Signal_i × Tilt_i",
         "7. Raw_i = MAX( Peer_i + Adj_i,  1.0 )",
         "8. Final_i = Raw_i / Σ Raw_j × 100",

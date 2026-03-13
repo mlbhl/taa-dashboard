@@ -4,7 +4,7 @@ TAA Dashboard
 두 가지 모드로 Final 비중을 산출:
 
 [Peer 기준] Final_i = normalize( Peer_i + α × Signal_i × Tilt_i )
-    Tilt_i = max( |SAA_i - Peer_i| × d,  Peer_i × min_tilt_rate )
+    Tilt_i = |SAA_i - Peer_i| × d  (gap=0이면 Peer_i × min_tilt_rate)
     d = 1.0 (aligned) / damping (opposed)
 
 [가중 평균 기준] Final_i = normalize( Base_i + α × Signal_i × Tilt_i )
@@ -46,7 +46,7 @@ def compute_final(df: pd.DataFrame, alpha: float, damping_opposed: float = 0.25,
 
     비대칭 Tilt: Signal 방향이 SAA 쪽이면 적극적(×1.0),
     SAA 반대 쪽이면 억제(×damping_opposed)하여 SAA 앵커 효과를 구현.
-    min_tilt_rate: gap=0일 때도 최소 Tilt = Peer × min_tilt_rate 보장.
+    min_tilt_rate: gap=0일 때만 Tilt = Peer × min_tilt_rate 적용.
     """
     df = df.copy()
     df["Signal"] = df["TAA"].map(TAA_MAP).fillna(0).astype(float)
@@ -55,7 +55,7 @@ def compute_final(df: pd.DataFrame, alpha: float, damping_opposed: float = 0.25,
     aligned = df["Signal"] * gap >= 0          # Signal이 SAA 쪽으로 향하는가
     damping = aligned * (1.0 - damping_opposed) + damping_opposed
     min_tilt = df["Peer"] * min_tilt_rate
-    df["Tilt"] = (gap.abs() * damping).clip(lower=min_tilt)
+    df["Tilt"] = (gap.abs() * damping).where(gap != 0, min_tilt)
 
     df["Adj"] = alpha * df["Signal"] * df["Tilt"]
     df["Raw"] = df["Peer"] + df["Adj"]
@@ -842,7 +842,7 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
     if mode == "peer":
         formula = [
             html.Div([html.Span("1. ", style={"color": ACCENT}), "Signal_i = TAA 의견의 수치 변환 (SOW=+2, OW=+1, N=0, UW=−1, SUW=−2)"]),
-            html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = max( |SAA_i − Peer_i| × d_i,  Peer_i × {min_tilt_rate:.0%} )"]),
+            html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = |SAA_i − Peer_i| × d_i  (gap=0이면 Peer_i × {min_tilt_rate:.0%})"]),
             html.Div([html.Span("   ", style={"color": ACCENT}), f"d_i = 1.0 (Signal이 SAA 방향)  /  {damping_opposed:.2f} (Signal이 SAA 반대 방향)"]),
             html.Div([html.Span("3. ", style={"color": ACCENT}), "Adj_i = α × Signal_i × Tilt_i"]),
             html.Div([html.Span("4. ", style={"color": ACCENT}), "Raw_i = max( Peer_i + Adj_i,  1.0 )"]),
