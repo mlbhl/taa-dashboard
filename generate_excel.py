@@ -76,7 +76,7 @@ def build_peer_sheet(wb):
     """Peer 기준 모드 시트"""
     ws = wb.active
     ws.title = "Peer 기준"
-    set_col_widths(ws, [3, 8, 8, 10, 10, 14, 10, 10, 10, 10, 10, 10, 10, 10, 12])
+    set_col_widths(ws, [3, 20, 8, 10, 10, 14, 10, 12, 10, 10, 10, 10, 10, 12, 12])
 
     # ── Title ──
     ws.merge_cells("B1:H1")
@@ -109,17 +109,19 @@ def build_peer_sheet(wb):
     ws["E6"] = "← gap=0일 때 최소 Tilt 보장율"
     ws["E6"].font = DIM_FONT
 
-    # ── TAA Signal 매핑 참조 ──
+    # ── TAA Signal 매핑 참조 (H4:I8 → VLOOKUP 범위) ──
     ws["H3"] = "TAA Signal 매핑"
     ws["H3"].font = SECTION_FONT
+    write_header_row(ws, 4, ["TAA", "Signal"], start_col=8)
     mapping = [("Strong OW", 2), ("Overweight", 1), ("Neutral", 0), ("Underweight", -1), ("Strong UW", -2)]
     for i, (label, val) in enumerate(mapping):
-        ws.cell(row=4 + i, column=8, value=label).font = CELL_FONT
-        ws.cell(row=4 + i, column=9, value=val).font = PARAM_FONT
-        ws.cell(row=4 + i, column=9).alignment = Alignment(horizontal="center")
+        ws.cell(row=5 + i, column=8, value=label).font = CELL_FONT
+        ws.cell(row=5 + i, column=8).alignment = Alignment(horizontal="center")
+        ws.cell(row=5 + i, column=9, value=val).font = PARAM_FONT
+        ws.cell(row=5 + i, column=9).alignment = Alignment(horizontal="center")
 
     # ── Input Table ──
-    DATA_START = 10
+    DATA_START = 11
     ws[f"B{DATA_START - 1}"] = "Region Inputs"
     ws[f"B{DATA_START - 1}"].font = SECTION_FONT
 
@@ -183,16 +185,9 @@ def build_peer_sheet(wb):
         ws.cell(row=r, column=5).value = f"=E{dr}"
         ws.cell(row=r, column=5).number_format = "0.0"
 
-        # Signal = VLOOKUP 또는 중첩 IF
-        # Signal: TAA → 숫자 변환
+        # Signal: VLOOKUP으로 매핑 테이블 참조 ($H$5:$I$9)
         taa_cell = f"F{dr}"
-        ws.cell(row=r, column=6).value = (
-            f'=IF({taa_cell}="Strong OW",2,'
-            f'IF({taa_cell}="Overweight",1,'
-            f'IF({taa_cell}="Neutral",0,'
-            f'IF({taa_cell}="Underweight",-1,'
-            f'IF({taa_cell}="Strong UW",-2,0)))))'
-        )
+        ws.cell(row=r, column=6).value = f"=VLOOKUP({taa_cell},$H$5:$I$9,2,FALSE)"
         ws.cell(row=r, column=6).number_format = "0"
 
         # Gap = SAA - Peer
@@ -320,7 +315,7 @@ def build_peer_sheet(wb):
 def build_weighted_sheet(wb):
     """가중 평균 기준 모드 시트"""
     ws = wb.create_sheet("가중 평균 기준")
-    set_col_widths(ws, [3, 8, 8, 10, 10, 14, 10, 10, 10, 10, 10, 10, 10, 12])
+    set_col_widths(ws, [3, 20, 8, 10, 10, 14, 10, 10, 10, 10, 12, 12])
 
     # ── Title ──
     ws.merge_cells("B1:H1")
@@ -353,17 +348,19 @@ def build_weighted_sheet(wb):
     ws["E6"] = "← Base 대비 Tilt 비율"
     ws["E6"].font = DIM_FONT
 
-    # ── TAA Signal 매핑 참조 ──
+    # ── TAA Signal 매핑 참조 (H4:I8 → VLOOKUP 범위) ──
     ws["H3"] = "TAA Signal 매핑"
     ws["H3"].font = SECTION_FONT
+    write_header_row(ws, 4, ["TAA", "Signal"], start_col=8)
     mapping = [("Strong OW", 2), ("Overweight", 1), ("Neutral", 0), ("Underweight", -1), ("Strong UW", -2)]
     for i, (label, val) in enumerate(mapping):
-        ws.cell(row=4 + i, column=8, value=label).font = CELL_FONT
-        ws.cell(row=4 + i, column=9, value=val).font = PARAM_FONT
-        ws.cell(row=4 + i, column=9).alignment = Alignment(horizontal="center")
+        ws.cell(row=5 + i, column=8, value=label).font = CELL_FONT
+        ws.cell(row=5 + i, column=8).alignment = Alignment(horizontal="center")
+        ws.cell(row=5 + i, column=9, value=val).font = PARAM_FONT
+        ws.cell(row=5 + i, column=9).alignment = Alignment(horizontal="center")
 
     # ── Input Table ──
-    DATA_START = 10
+    DATA_START = 11
     ws[f"B{DATA_START - 1}"] = "Region Inputs"
     ws[f"B{DATA_START - 1}"].font = SECTION_FONT
 
@@ -423,15 +420,9 @@ def build_weighted_sheet(wb):
         ws.cell(row=r, column=5).value = f"=E{dr}"
         ws.cell(row=r, column=5).number_format = "0.0"
 
-        # Signal
+        # Signal: VLOOKUP으로 매핑 테이블 참조 ($H$5:$I$9)
         taa_cell = f"F{dr}"
-        ws.cell(row=r, column=6).value = (
-            f'=IF({taa_cell}="Strong OW",2,'
-            f'IF({taa_cell}="Overweight",1,'
-            f'IF({taa_cell}="Neutral",0,'
-            f'IF({taa_cell}="Underweight",-1,'
-            f'IF({taa_cell}="Strong UW",-2,0)))))'
-        )
+        ws.cell(row=r, column=6).value = f"=VLOOKUP({taa_cell},$H$5:$I$9,2,FALSE)"
         ws.cell(row=r, column=6).number_format = "0"
 
         # Base = w * SAA + (1-w) * Peer
