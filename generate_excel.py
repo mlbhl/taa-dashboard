@@ -1,10 +1,12 @@
 """
-taa_portfolio_optimizer.py의 계산 로직을 Excel 수식으로 구현하는 스크립트.
-두 시트: (1) Peer 기준 모드, (2) 가중 평균 기준 모드
+taa_portfolio_optimizer.py의 2단계 배분 로직을 Excel 수식으로 구현하는 스크립트.
+
+Step 1: 자산군 시그널 → 주식/채권 총비중 (SAA 기준, 점수차 × 2.5%p)
+Step 2: 개별 시그널 → Base 비례 Tilt로 자산군 내 배분
 """
 
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -19,8 +21,6 @@ DIM_FONT = Font(name="맑은 고딕", size=9, color="94A3B8")
 PARAM_FONT = Font(name="맑은 고딕", size=10, bold=True, color=ACCENT)
 INPUT_FILL = PatternFill(start_color="FFFBEB", end_color="FFFBEB", fill_type="solid")
 RESULT_FILL = PatternFill(start_color="EEF2FF", end_color="EEF2FF", fill_type="solid")
-GREEN_FONT = Font(name="맑은 고딕", size=10, bold=True, color="059669")
-RED_FONT = Font(name="맑은 고딕", size=10, bold=True, color="DC2626")
 THIN_BORDER = Border(
     bottom=Side(style="thin", color="E2E8F0"),
 )
@@ -69,282 +69,15 @@ def write_header_row(ws, row, headers, start_col=1):
         c.border = BOTTOM_BORDER
 
 
-def apply_data_style(ws, row, col, font=CELL_FONT, alignment=None, fill=None, border=THIN_BORDER, number_format=None):
-    c = ws.cell(row=row, column=col)
-    c.font = font
-    if alignment:
-        c.alignment = alignment
-    if fill:
-        c.fill = fill
-    if border:
-        c.border = border
-    if number_format:
-        c.number_format = number_format
-    return c
-
-
-def build_peer_sheet(wb):
-    """Peer 기준 모드 시트"""
+def build_sheet(wb):
+    """TAA Dashboard 시트 (2단계 배분: 자산군 시그널 + Base 비례 Tilt)"""
     ws = wb.active
-    ws.title = "Peer 기준"
-    set_col_widths(ws, [3, 20, 8, 10, 10, 14, 10, 12, 10, 10, 10, 10, 10, 12, 12, 12])
-
-    # ── Title ──
-    ws.merge_cells("B1:H1")
-    ws["B1"] = "TAA Dashboard — Peer 기준 (비대칭 Tilt)"
-    ws["B1"].font = TITLE_FONT
-
-    # ── Parameters ──
-    ws["B3"] = "Parameters"
-    ws["B3"].font = SECTION_FONT
-
-    params = [
-        ("B4", "α (확신도)", "C4", 0.50),
-        ("B5", "Damping (반대방향)", "C5", 0.25),
-        ("B6", "Min Tilt Rate", "C6", 0.20),
-    ]
-    for label_cell, label, val_cell, val in params:
-        ws[label_cell] = label
-        ws[label_cell].font = CELL_FONT
-        c = ws[val_cell]
-        c.value = val
-        c.font = PARAM_FONT
-        c.fill = INPUT_FILL
-        c.number_format = "0.00"
-        c.alignment = Alignment(horizontal="center")
-
-    ws["E4"] = "← 0~1 (보수적 → 적극적)"
-    ws["E4"].font = DIM_FONT
-    ws["E5"] = "← 0~1 (0=강한억제, 1=억제없음)"
-    ws["E5"].font = DIM_FONT
-    ws["E6"] = "← gap=0일 때 최소 Tilt 보장율"
-    ws["E6"].font = DIM_FONT
-
-    # ── TAA Signal 매핑 참조 (H4:I8 → VLOOKUP 범위) ──
-    ws["H3"] = "TAA Signal 매핑"
-    ws["H3"].font = SECTION_FONT
-    write_header_row(ws, 4, ["TAA", "Signal"], start_col=8)
-    mapping = [("Strong OW", 2), ("Overweight", 1), ("Neutral", 0), ("Underweight", -1), ("Strong UW", -2)]
-    for i, (label, val) in enumerate(mapping):
-        ws.cell(row=5 + i, column=8, value=label).font = CELL_FONT
-        ws.cell(row=5 + i, column=8).alignment = Alignment(horizontal="center")
-        ws.cell(row=5 + i, column=9, value=val).font = PARAM_FONT
-        ws.cell(row=5 + i, column=9).alignment = Alignment(horizontal="center")
-
-    # ── Input Table ──
-    DATA_START = 11
-    ws[f"B{DATA_START - 1}"] = "Region Inputs"
-    ws[f"B{DATA_START - 1}"].font = SECTION_FONT
-
-    headers = ["자산", "지역", "SAA(%)", "Peer(%)", "TAA"]
-    write_header_row(ws, DATA_START, headers, start_col=2)
-
-    # TAA 드롭다운 유효성 검사
-    dv = DataValidation(type="list", formula1='"Strong OW,Overweight,Neutral,Underweight,Strong UW"', allow_blank=True)
-    dv.error = "TAA 옵션에서 선택하세요"
-    dv.errorTitle = "잘못된 입력"
-    ws.add_data_validation(dv)
-
-    for i, (asset, region, saa, peer, taa) in enumerate(DEFAULT_DATA):
-        r = DATA_START + 1 + i
-        ws.cell(row=r, column=2, value=asset).font = Font(name="맑은 고딕", size=10, bold=True, color=ACCENT)
-        ws.cell(row=r, column=3, value=region).font = Font(name="맑은 고딕", size=10, bold=True)
-        c_saa = ws.cell(row=r, column=4, value=saa)
-        c_saa.font = CELL_FONT
-        c_saa.fill = INPUT_FILL
-        c_saa.number_format = "0.0"
-        c_saa.alignment = Alignment(horizontal="center")
-        c_peer = ws.cell(row=r, column=5, value=peer)
-        c_peer.font = CELL_FONT
-        c_peer.fill = INPUT_FILL
-        c_peer.number_format = "0.0"
-        c_peer.alignment = Alignment(horizontal="center")
-        c_taa = ws.cell(row=r, column=6, value=taa)
-        c_taa.font = CELL_FONT
-        c_taa.fill = INPUT_FILL
-        c_taa.alignment = Alignment(horizontal="center")
-        dv.add(c_taa)
-        for col in range(2, 7):
-            ws.cell(row=r, column=col).border = THIN_BORDER
-
-    # ── Calculation Table ──
-    CALC_START = DATA_START + N + 3
-    ws[f"B{CALC_START - 1}"] = "Calculation"
-    ws[f"B{CALC_START - 1}"].font = SECTION_FONT
-
-    calc_headers = ["자산", "지역", "SAA", "Peer", "Signal", "Gap", "Aligned?", "Damping", "Min Tilt", "Tilt", "Adj", "Raw", "Final(%)", "vs Peer", "vs SAA"]
-    write_header_row(ws, CALC_START, calc_headers, start_col=2)
-
-    # Named references for parameters
-    alpha_ref = "$C$4"
-    damping_ref = "$C$5"
-    mintilt_ref = "$C$6"
-
-    for i in range(N):
-        r = CALC_START + 1 + i
-        dr = DATA_START + 1 + i  # data row
-
-        # 자산, 지역 (참조)
-        ws.cell(row=r, column=2).value = f"=B{dr}"
-        ws.cell(row=r, column=2).font = Font(name="맑은 고딕", size=10, bold=True, color=ACCENT)
-        ws.cell(row=r, column=3).value = f"=C{dr}"
-        ws.cell(row=r, column=3).font = Font(name="맑은 고딕", size=10, bold=True)
-
-        # SAA, Peer (참조)
-        ws.cell(row=r, column=4).value = f"=D{dr}"
-        ws.cell(row=r, column=4).number_format = "0.0"
-        ws.cell(row=r, column=5).value = f"=E{dr}"
-        ws.cell(row=r, column=5).number_format = "0.0"
-
-        # Signal: VLOOKUP으로 매핑 테이블 참조 ($H$5:$I$9)
-        taa_cell = f"F{dr}"
-        ws.cell(row=r, column=6).value = f"=VLOOKUP({taa_cell},$H$5:$I$9,2,FALSE)"
-        ws.cell(row=r, column=6).number_format = "0"
-
-        # Gap = SAA - Peer
-        ws.cell(row=r, column=7).value = f"=D{r}-E{r}"
-        ws.cell(row=r, column=7).number_format = "0.00"
-
-        # Aligned? = (Signal * Gap >= 0) → 1 or 0
-        ws.cell(row=r, column=8).value = f"=IF(F{r}*G{r}>=0,1,0)"
-        ws.cell(row=r, column=8).number_format = "0"
-
-        # Damping = Aligned * (1 - damping_opposed) + damping_opposed
-        ws.cell(row=r, column=9).value = f"=H{r}*(1-{damping_ref})+{damping_ref}"
-        ws.cell(row=r, column=9).number_format = "0.00"
-
-        # Min Tilt = Peer * min_tilt_rate
-        ws.cell(row=r, column=10).value = f"=E{r}*{mintilt_ref}"
-        ws.cell(row=r, column=10).number_format = "0.00"
-
-        # Tilt = IF(Gap=0, Min Tilt, ABS(Gap) * Damping)
-        ws.cell(row=r, column=11).value = f"=IF(G{r}=0, J{r}, ABS(G{r})*I{r})"
-        ws.cell(row=r, column=11).number_format = "0.00"
-
-        # Adj = α * Signal * Tilt
-        ws.cell(row=r, column=12).value = f"={alpha_ref}*F{r}*K{r}"
-        ws.cell(row=r, column=12).number_format = "+0.00;-0.00;0.00"
-
-        # Raw = MAX(Peer + Adj, 1.0)
-        ws.cell(row=r, column=13).value = f"=MAX(E{r}+L{r}, 1.0)"
-        ws.cell(row=r, column=13).number_format = "0.00"
-
-        # Final(%) = Raw / SUM(Raw) * 100
-        raw_range = f"M{CALC_START+1}:M{CALC_START+N}"
-        ws.cell(row=r, column=14).value = f"=ROUND(M{r}/SUM({raw_range})*100, 2)"
-        ws.cell(row=r, column=14).number_format = "0.00"
-        ws.cell(row=r, column=14).fill = RESULT_FILL
-        ws.cell(row=r, column=14).font = Font(name="맑은 고딕", size=10, bold=True)
-
-        # vs Peer = Final - Peer
-        ws.cell(row=r, column=15).value = f"=ROUND(N{r}-E{r}, 2)"
-        ws.cell(row=r, column=15).number_format = "+0.00;-0.00;0.00"
-
-        # vs SAA = Final - SAA
-        ws.cell(row=r, column=16).value = f"=ROUND(N{r}-D{r}, 2)"
-        ws.cell(row=r, column=16).number_format = "+0.00;-0.00;0.00"
-
-        # 스타일
-        for col in range(2, 17):
-            c = ws.cell(row=r, column=col)
-            if not c.font or c.font == Font():
-                c.font = CELL_FONT
-            c.alignment = Alignment(horizontal="center")
-            c.border = THIN_BORDER
-
-    # Peer sheet의 CALC_START를 반환을 위해 저장
-    ws._calc_start = CALC_START
-
-    # ── 합계 행 ──
-    sum_row = CALC_START + N + 1
-    ws.cell(row=sum_row, column=2, value="합계").font = Font(name="맑은 고딕", size=10, bold=True)
-    for col in [4, 5, 13, 14]:
-        rng = f"{get_column_letter(col)}{CALC_START+1}:{get_column_letter(col)}{CALC_START+N}"
-        ws.cell(row=sum_row, column=col).value = f"=SUM({rng})"
-        ws.cell(row=sum_row, column=col).font = Font(name="맑은 고딕", size=10, bold=True)
-        ws.cell(row=sum_row, column=col).number_format = "0.0"
-        ws.cell(row=sum_row, column=col).alignment = Alignment(horizontal="center")
-        ws.cell(row=sum_row, column=col).border = Border(top=Side(style="medium", color="CBD5E1"))
-
-    # ── Range (범위) ──
-    RANGE_START = sum_row + 3
-    ws[f"B{RANGE_START - 1}"] = "Range (허용 범위)"
-    ws[f"B{RANGE_START - 1}"].font = SECTION_FONT
-
-    range_headers = ["자산", "지역", "Final(%)", "Half Width", "Low(%)", "High(%)"]
-    write_header_row(ws, RANGE_START, range_headers, start_col=2)
-
-    for i in range(N):
-        r = RANGE_START + 1 + i
-        cr = CALC_START + 1 + i
-
-        ws.cell(row=r, column=2).value = f"=B{cr}"
-        ws.cell(row=r, column=2).font = Font(name="맑은 고딕", size=10, bold=True, color=ACCENT)
-        ws.cell(row=r, column=3).value = f"=C{cr}"
-        ws.cell(row=r, column=3).font = Font(name="맑은 고딕", size=10, bold=True)
-
-        # Final 참조
-        ws.cell(row=r, column=4).value = f"=N{cr}"
-        ws.cell(row=r, column=4).number_format = "0.00"
-        ws.cell(row=r, column=4).fill = RESULT_FILL
-
-        # Half Width: >=20 → 7.5, >=10 → 5.0, else 2.5
-        ws.cell(row=r, column=5).value = f'=IF(D{r}>=20, 7.5, IF(D{r}>=10, 5.0, 2.5))'
-        ws.cell(row=r, column=5).number_format = "0.0"
-
-        # Low = MAX(Final - HalfWidth, 0)
-        ws.cell(row=r, column=6).value = f"=ROUND(MAX(D{r}-E{r}, 0), 2)"
-        ws.cell(row=r, column=6).number_format = "0.00"
-        ws.cell(row=r, column=6).fill = INPUT_FILL
-
-        # High = Final + HalfWidth
-        ws.cell(row=r, column=7).value = f"=ROUND(D{r}+E{r}, 2)"
-        ws.cell(row=r, column=7).number_format = "0.00"
-        ws.cell(row=r, column=7).fill = INPUT_FILL
-
-        for col in range(2, 8):
-            c = ws.cell(row=r, column=col)
-            if not c.font or c.font == Font():
-                c.font = CELL_FONT
-            c.alignment = Alignment(horizontal="center")
-            c.border = THIN_BORDER
-
-    # ── Formula Reference ──
-    FORMULA_START = RANGE_START + N + 3
-    ws[f"B{FORMULA_START}"] = "Formula Reference"
-    ws[f"B{FORMULA_START}"].font = SECTION_FONT
-    formulas = [
-        "1. Signal_i = TAA 의견 → 수치 (SOW=+2, OW=+1, N=0, UW=-1, SUW=-2)",
-        "2. Gap_i = SAA_i - Peer_i",
-        "3. Aligned = 1 if Signal×Gap ≥ 0, else 0",
-        "4. Damping_i = Aligned × (1 - d) + d    (d = Damping 파라미터)",
-        "5. Tilt_i = |Gap_i| × Damping_i  (gap=0이면 Peer_i × Min Tilt Rate)",
-        "6. Adj_i = α × Signal_i × Tilt_i",
-        "7. Raw_i = MAX( Peer_i + Adj_i,  1.0 )",
-        "8. Final_i = Raw_i / Σ Raw_j × 100",
-        "9. Range: Final ≥ 20% → ±7.5%p, ≥ 10% → ±5%p, < 10% → ±2.5%p",
-    ]
-    for i, f in enumerate(formulas):
-        ws.cell(row=FORMULA_START + 1 + i, column=2, value=f).font = Font(name="맑은 고딕", size=9, color="475569")
-
-    # ── Vintage Propagation ──
-    # Peer sheet: SAA=col D, Raw=col M, calc data starts at CALC_START+1
-    vintage_row = FORMULA_START + len(formulas) + 3
-    for v_name, v_eq, v_bd in VINTAGE_CONFIGS:
-        vintage_row = build_vintage_section(ws, vintage_row, v_name, v_eq, v_bd,
-                                            saa_col="D", raw_col="M", calc_start=CALC_START + 1)
-
-    return ws
-
-
-def build_weighted_sheet(wb):
-    """가중 평균 기준 모드 시트"""
-    ws = wb.create_sheet("가중 평균 기준")
+    ws.title = "TAA Dashboard"
     set_col_widths(ws, [3, 20, 8, 10, 10, 14, 10, 10, 10, 10, 12, 12, 12])
 
     # ── Title ──
     ws.merge_cells("B1:H1")
-    ws["B1"] = "TAA Dashboard — 가중 평균 기준 (Base 비례 Tilt)"
+    ws["B1"] = "TAA Dashboard"
     ws["B1"].font = TITLE_FONT
 
     # ── Parameters ──
@@ -374,9 +107,9 @@ def build_weighted_sheet(wb):
     ws["E6"].font = DIM_FONT
 
     # ── TAA Signal 매핑 참조 (H4:I8 → VLOOKUP 범위) ──
-    ws["H3"] = "TAA Signal 매핑"
+    ws["H3"] = "View Signal 매핑"
     ws["H3"].font = SECTION_FONT
-    write_header_row(ws, 4, ["TAA", "Signal"], start_col=8)
+    write_header_row(ws, 4, ["View", "Signal"], start_col=8)
     mapping = [("Strong OW", 2), ("Overweight", 1), ("Neutral", 0), ("Underweight", -1), ("Strong UW", -2)]
     for i, (label, val) in enumerate(mapping):
         ws.cell(row=5 + i, column=8, value=label).font = CELL_FONT
@@ -384,12 +117,87 @@ def build_weighted_sheet(wb):
         ws.cell(row=5 + i, column=9, value=val).font = PARAM_FONT
         ws.cell(row=5 + i, column=9).alignment = Alignment(horizontal="center")
 
-    # ── Input Table ──
-    DATA_START = 11
+    # ── 자산군 시그널 (Step 1) ──
+    ws["B8"] = "자산군 시그널 (Step 1)"
+    ws["B8"].font = SECTION_FONT
+
+    write_header_row(ws, 9, ["자산군", "View", "Score"], start_col=2)
+
+    taa_dv = DataValidation(type="list", formula1='"Strong OW,Overweight,Neutral,Underweight,Strong UW"', allow_blank=True)
+    ws.add_data_validation(taa_dv)
+
+    for i, (ac_name, default_taa) in enumerate([("주식", "Neutral"), ("채권", "Neutral")]):
+        r = 10 + i
+        ws.cell(row=r, column=2, value=ac_name).font = Font(name="맑은 고딕", size=10, bold=True, color=ACCENT)
+        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=2).border = THIN_BORDER
+        c_taa = ws.cell(row=r, column=3, value=default_taa)
+        c_taa.font = CELL_FONT
+        c_taa.fill = INPUT_FILL
+        c_taa.alignment = Alignment(horizontal="center")
+        c_taa.border = THIN_BORDER
+        taa_dv.add(c_taa)
+        # Score = VLOOKUP
+        ws.cell(row=r, column=4).value = f"=VLOOKUP(C{r},$H$5:$I$9,2,FALSE)"
+        ws.cell(row=r, column=4).font = PARAM_FONT
+        ws.cell(row=r, column=4).alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=4).border = THIN_BORDER
+        ws.cell(row=r, column=4).number_format = "0"
+
+    # Step 1 계산 결과 (오른쪽)
+    ws["F8"] = "Step 1 계산"
+    ws["F8"].font = SECTION_FONT
+
+    write_header_row(ws, 9, ["항목", "값"], start_col=6)
+
+    # DATA_START는 14이므로, 입력 데이터는 row 15~22
+    DATA_START = 14
+
+    # Shift = (주식 Score - 채권 Score) * 2.5
+    ws.cell(row=10, column=6, value="Shift(%p)").font = CELL_FONT
+    ws.cell(row=10, column=6).alignment = Alignment(horizontal="center")
+    ws.cell(row=10, column=6).border = THIN_BORDER
+    ws.cell(row=10, column=7).value = "=(D10-D11)*2.5"
+    ws.cell(row=10, column=7).font = PARAM_FONT
+    ws.cell(row=10, column=7).alignment = Alignment(horizontal="center")
+    ws.cell(row=10, column=7).border = THIN_BORDER
+    ws.cell(row=10, column=7).number_format = "+0.00;-0.00;0.00"
+
+    # 주식 비중 = MAX(SAA_equity_sum + shift, 1)
+    eq_saa_sum = f"SUMIF($B${DATA_START+1}:$B${DATA_START+N},\"주식\",$D${DATA_START+1}:$D${DATA_START+N})"
+    bd_saa_sum = f"SUMIF($B${DATA_START+1}:$B${DATA_START+N},\"채권\",$D${DATA_START+1}:$D${DATA_START+N})"
+
+    ws.cell(row=11, column=6, value="주식 비중(%)").font = CELL_FONT
+    ws.cell(row=11, column=6).alignment = Alignment(horizontal="center")
+    ws.cell(row=11, column=6).border = THIN_BORDER
+    # Raw class totals (helper cells)
+    ws.cell(row=11, column=8).value = f"=MAX({eq_saa_sum}+$G$10,0)"
+    ws.cell(row=11, column=8).font = DIM_FONT
+    ws.cell(row=11, column=8).number_format = "0.00"
+    ws.cell(row=12, column=8).value = f"=MAX({bd_saa_sum}-$G$10,0)"
+    ws.cell(row=12, column=8).font = DIM_FONT
+    ws.cell(row=12, column=8).number_format = "0.00"
+    # Corrected class totals (subtract excess from larger)
+    ws.cell(row=11, column=7).value = "=H11-IF(H11>=H12,MAX(H11+H12-100,0),0)"
+    ws.cell(row=11, column=7).font = PARAM_FONT
+    ws.cell(row=11, column=7).alignment = Alignment(horizontal="center")
+    ws.cell(row=11, column=7).border = THIN_BORDER
+    ws.cell(row=11, column=7).number_format = "0.00"
+
+    ws.cell(row=12, column=6, value="채권 비중(%)").font = CELL_FONT
+    ws.cell(row=12, column=6).alignment = Alignment(horizontal="center")
+    ws.cell(row=12, column=6).border = THIN_BORDER
+    ws.cell(row=12, column=7).value = "=H12-IF(H12>H11,MAX(H11+H12-100,0),0)"
+    ws.cell(row=12, column=7).font = PARAM_FONT
+    ws.cell(row=12, column=7).alignment = Alignment(horizontal="center")
+    ws.cell(row=12, column=7).border = THIN_BORDER
+    ws.cell(row=12, column=7).number_format = "0.00"
+
+    # ── Region Input Table ──
     ws[f"B{DATA_START - 1}"] = "Region Inputs"
     ws[f"B{DATA_START - 1}"].font = SECTION_FONT
 
-    headers = ["자산", "지역", "SAA(%)", "Peer(%)", "TAA"]
+    headers = ["자산", "지역", "SAA(%)", "Peer(%)", "View"]
     write_header_row(ws, DATA_START, headers, start_col=2)
 
     dv = DataValidation(type="list", formula1='"Strong OW,Overweight,Neutral,Underweight,Strong UW"', allow_blank=True)
@@ -417,17 +225,21 @@ def build_weighted_sheet(wb):
         for col in range(2, 7):
             ws.cell(row=r, column=col).border = THIN_BORDER
 
-    # ── Calculation Table ──
+    # ── Calculation Table (Step 2) ──
     CALC_START = DATA_START + N + 3
-    ws[f"B{CALC_START - 1}"] = "Calculation"
+    ws[f"B{CALC_START - 1}"] = "Calculation (Step 2)"
     ws[f"B{CALC_START - 1}"].font = SECTION_FONT
 
-    calc_headers = ["자산", "지역", "SAA", "Peer", "Signal", "Base", "Tilt", "Adj", "Raw", "Final(%)", "vs Peer", "vs SAA"]
+    calc_headers = ["자산", "지역", "SAA", "Peer", "Signal", "Base", "Tilt", "Adj", "Raw", "TAA(%)", "vs Peer", "vs SAA"]
     write_header_row(ws, CALC_START, calc_headers, start_col=2)
 
     alpha_ref = "$C$4"
     w_ref = "$C$5"
     tilt_rate_ref = "$C$6"
+
+    # Raw range refs for per-class SUMIF
+    calc_b_range = f"$B${CALC_START+1}:$B${CALC_START+N}"  # 자산 column
+    calc_raw_range = f"$J${CALC_START+1}:$J${CALC_START+N}"  # Raw column
 
     for i in range(N):
         r = CALC_START + 1 + i
@@ -445,7 +257,7 @@ def build_weighted_sheet(wb):
         ws.cell(row=r, column=5).value = f"=E{dr}"
         ws.cell(row=r, column=5).number_format = "0.0"
 
-        # Signal: VLOOKUP으로 매핑 테이블 참조 ($H$5:$I$9)
+        # Signal: VLOOKUP
         taa_cell = f"F{dr}"
         ws.cell(row=r, column=6).value = f"=VLOOKUP({taa_cell},$H$5:$I$9,2,FALSE)"
         ws.cell(row=r, column=6).number_format = "0"
@@ -462,23 +274,26 @@ def build_weighted_sheet(wb):
         ws.cell(row=r, column=9).value = f"={alpha_ref}*F{r}*H{r}"
         ws.cell(row=r, column=9).number_format = "+0.00;-0.00;0.00"
 
-        # Raw = MAX(Base + Adj, 1.0)
-        ws.cell(row=r, column=10).value = f"=MAX(G{r}+I{r}, 1.0)"
+        # Raw = MAX(Base + Adj, 0)
+        ws.cell(row=r, column=10).value = f"=MAX(G{r}+I{r}, 0)"
         ws.cell(row=r, column=10).number_format = "0.00"
 
-        # Final(%) = Raw / SUM(Raw) * 100
-        raw_range = f"J{CALC_START+1}:J{CALC_START+N}"
-        ws.cell(row=r, column=11).value = f"=ROUND(J{r}/SUM({raw_range})*100, 2)"
+        # TAA(%) = Raw / SUMIF(같은 자산군 Raw) * class_total (0이면 0)
+        class_ref = f'IF(B{r}="주식",$G$11,$G$12)'
+        ws.cell(row=r, column=11).value = (
+            f"=IF({class_ref}=0,0,"
+            f"J{r}/SUMIF({calc_b_range},B{r},{calc_raw_range})*{class_ref})"
+        )
         ws.cell(row=r, column=11).number_format = "0.00"
         ws.cell(row=r, column=11).fill = RESULT_FILL
         ws.cell(row=r, column=11).font = Font(name="맑은 고딕", size=10, bold=True)
 
-        # vs Peer = Final - Peer
-        ws.cell(row=r, column=12).value = f"=ROUND(K{r}-E{r}, 2)"
+        # vs Peer = TAA - Peer
+        ws.cell(row=r, column=12).value = f"=K{r}-E{r}"
         ws.cell(row=r, column=12).number_format = "+0.00;-0.00;0.00"
 
-        # vs SAA = Final - SAA
-        ws.cell(row=r, column=13).value = f"=ROUND(K{r}-D{r}, 2)"
+        # vs SAA = TAA - SAA
+        ws.cell(row=r, column=13).value = f"=K{r}-D{r}"
         ws.cell(row=r, column=13).number_format = "+0.00;-0.00;0.00"
 
         for col in range(2, 14):
@@ -499,7 +314,6 @@ def build_weighted_sheet(wb):
         ws.cell(row=sum_row, column=col).alignment = Alignment(horizontal="center")
         ws.cell(row=sum_row, column=col).border = Border(top=Side(style="medium", color="CBD5E1"))
 
-    # Weighted sheet의 CALC_START를 반환을 위해 저장
     ws._calc_start = CALC_START
 
     # ── Range (범위) ──
@@ -507,34 +321,51 @@ def build_weighted_sheet(wb):
     ws[f"B{RANGE_START - 1}"] = "Range (허용 범위)"
     ws[f"B{RANGE_START - 1}"].font = SECTION_FONT
 
-    range_headers = ["자산", "지역", "Final(%)", "Half Width", "Low(%)", "High(%)"]
+    range_headers = ["자산", "지역", "액티브(%)", "EMP(%)", "TAA(%)", "Half Width", "Low(%)", "High(%)"]
     write_header_row(ws, RANGE_START, range_headers, start_col=2)
+
+    AP_FILL = PatternFill(start_color="F0FDF4", end_color="F0FDF4", fill_type="solid")
 
     for i in range(N):
         r = RANGE_START + 1 + i
         cr = CALC_START + 1 + i
+        dr = DATA_START + 1 + i
 
         ws.cell(row=r, column=2).value = f"=B{cr}"
         ws.cell(row=r, column=2).font = Font(name="맑은 고딕", size=10, bold=True, color=ACCENT)
         ws.cell(row=r, column=3).value = f"=C{cr}"
         ws.cell(row=r, column=3).font = Font(name="맑은 고딕", size=10, bold=True)
 
-        ws.cell(row=r, column=4).value = f"=K{cr}"
+        # 액티브 (default=SAA, editable)
+        ws.cell(row=r, column=4).value = f"=D{dr}"
         ws.cell(row=r, column=4).number_format = "0.00"
-        ws.cell(row=r, column=4).fill = RESULT_FILL
+        ws.cell(row=r, column=4).fill = AP_FILL
 
-        ws.cell(row=r, column=5).value = f'=IF(D{r}>=20, 7.5, IF(D{r}>=10, 5.0, 2.5))'
-        ws.cell(row=r, column=5).number_format = "0.0"
+        # EMP (default=SAA, editable)
+        ws.cell(row=r, column=5).value = f"=D{dr}"
+        ws.cell(row=r, column=5).number_format = "0.00"
+        ws.cell(row=r, column=5).fill = AP_FILL
 
-        ws.cell(row=r, column=6).value = f"=ROUND(MAX(D{r}-E{r}, 0), 2)"
+        # TAA
+        ws.cell(row=r, column=6).value = f"=K{cr}"
         ws.cell(row=r, column=6).number_format = "0.00"
-        ws.cell(row=r, column=6).fill = INPUT_FILL
+        ws.cell(row=r, column=6).fill = RESULT_FILL
 
-        ws.cell(row=r, column=7).value = f"=ROUND(D{r}+E{r}, 2)"
-        ws.cell(row=r, column=7).number_format = "0.00"
-        ws.cell(row=r, column=7).fill = INPUT_FILL
+        # Half Width
+        ws.cell(row=r, column=7).value = f'=IF(F{r}>=20, 7.5, IF(F{r}>=10, 5.0, 2.5))'
+        ws.cell(row=r, column=7).number_format = "0.0"
 
-        for col in range(2, 8):
+        # Low
+        ws.cell(row=r, column=8).value = f"=MAX(F{r}-G{r}, 0)"
+        ws.cell(row=r, column=8).number_format = "0.00"
+        ws.cell(row=r, column=8).fill = INPUT_FILL
+
+        # High
+        ws.cell(row=r, column=9).value = f"=F{r}+G{r}"
+        ws.cell(row=r, column=9).number_format = "0.00"
+        ws.cell(row=r, column=9).fill = INPUT_FILL
+
+        for col in range(2, 10):
             c = ws.cell(row=r, column=col)
             if not c.font or c.font == Font():
                 c.font = CELL_FONT
@@ -546,19 +377,31 @@ def build_weighted_sheet(wb):
     ws[f"B{FORMULA_START}"] = "Formula Reference"
     ws[f"B{FORMULA_START}"].font = SECTION_FONT
     formulas = [
-        "1. Signal_i = TAA 의견 → 수치 (SOW=+2, OW=+1, N=0, UW=-1, SUW=-2)",
-        "2. Base_i = w × SAA_i + (1-w) × Peer_i",
-        "3. Tilt_i = Base_i × Tilt Rate",
-        "4. Adj_i = α × Signal_i × Tilt_i",
-        "5. Raw_i = MAX( Base_i + Adj_i,  1.0 )",
-        "6. Final_i = Raw_i / Σ Raw_j × 100",
-        "7. Range: Final ≥ 20% → ±7.5%p, ≥ 10% → ±5%p, < 10% → ±2.5%p",
+        "[ Step 1 ] 자산군 비중 결정",
+        "  Shift = (주식 Score - 채권 Score) × 2.5%p",
+        "  주식 비중 = MAX(SAA_주식합 + Shift, 0),  채권 비중 = MAX(SAA_채권합 - Shift, 0)",
+        "  → 합계 보정: 초과분을 큰 쪽에서 차감",
+        "",
+        "[ Step 2 ] 자산군 내 배분",
+        "  1. Signal_i = View → 수치 (SOW=+2, OW=+1, N=0, UW=-1, SUW=-2)",
+        "  2. Base_i = w × SAA_i + (1-w) × Peer_i",
+        "  3. Tilt_i = Base_i × Tilt Rate",
+        "  4. Adj_i = α × Signal_i × Tilt_i",
+        "  5. Raw_i = MAX( Base_i + Adj_i,  0 )",
+        "  6. TAA_i = Raw_i / Σ(같은자산군 Raw) × 자산군비중",
+        "  7. Range: TAA ≥ 20% → ±7.5%p, ≥ 10% → ±5%p, < 10% → ±2.5%p",
+        "",
+        "[ 빈티지 전파 ]",
+        "  Step 1. 빈티지 자산군비중 = 빈티지SAA ± Shift (동일 적용)",
+        "  Step 2. tilt_ratio_i = (Raw_2050_i - SAA_2050_i) / SAA_2050_i",
+        "          V_Raw_i = V_SAA_i × (1 + tilt_ratio_i)",
+        "          V_TAA = 빈티지자산군비중 × (V_Raw_i / Σ V_Raw_within_class)",
     ]
     for i, f in enumerate(formulas):
         ws.cell(row=FORMULA_START + 1 + i, column=2, value=f).font = Font(name="맑은 고딕", size=9, color="475569")
 
     # ── Vintage Propagation ──
-    # Weighted sheet: SAA=col D, Raw=col J, calc data starts at CALC_START+1
+    # SAA=col D, Raw=col J, calc data starts at CALC_START+1
     vintage_row = FORMULA_START + len(formulas) + 3
     for v_name, v_eq, v_bd in VINTAGE_CONFIGS:
         vintage_row = build_vintage_section(ws, vintage_row, v_name, v_eq, v_bd,
@@ -568,18 +411,43 @@ def build_weighted_sheet(wb):
 
 
 def build_vintage_section(ws, start_row, vintage_name, equity_pct, bond_pct, saa_col, raw_col, calc_start):
-    """빈티지 전파 섹션을 시트에 추가. 2050 SAA/Raw 참조하여 비례 tilt 전파.
-
-    saa_col: 2050 SAA가 있는 컬럼 문자 (예: "D")
-    raw_col: 2050 Raw가 있는 컬럼 문자 (예: "M" for Peer, "J" for Weighted)
-    calc_start: 2050 계산 테이블의 첫 데이터 행
-    """
+    """빈티지 전파 섹션을 시트에 추가. Step 1(class shift) + Step 2(비례 tilt) 전파."""
     row = start_row
     ws.cell(row=row, column=2, value=f"TDF {vintage_name}  (주식 {equity_pct}% / 채권 {bond_pct}%)")
     ws.cell(row=row, column=2).font = SECTION_FONT
     row += 1
 
-    headers = ["자산", "지역", "V.SAA(%)", "Tilt Ratio", "V.Raw", "Final(%)", "vs SAA", "Low(%)", "High(%)"]
+    # Step 1: 빈티지 자산군비중 (class signal shift 반영)
+    # G10 = Shift (이미 메인 시트에서 계산됨)
+    eq_class_cell = f"H{row}"
+    bd_class_cell = f"I{row}"
+    ws.cell(row=row, column=2, value="Step 1").font = DIM_FONT
+    ws.cell(row=row, column=3, value="V.주식비중").font = DIM_FONT
+    ws.cell(row=row, column=3).alignment = Alignment(horizontal="center")
+    ws.cell(row=row, column=4, value="V.채권비중").font = DIM_FONT
+    ws.cell(row=row, column=4).alignment = Alignment(horizontal="center")
+    # Raw class totals (helper cells J, K)
+    raw_eq_cell = f"J{row}"
+    raw_bd_cell = f"K{row}"
+    ws.cell(row=row, column=10).value = f"=MAX({equity_pct}+$G$10,0)"
+    ws.cell(row=row, column=10).font = DIM_FONT
+    ws.cell(row=row, column=10).number_format = "0.00"
+    ws.cell(row=row, column=11).value = f"=MAX({bond_pct}-$G$10,0)"
+    ws.cell(row=row, column=11).font = DIM_FONT
+    ws.cell(row=row, column=11).number_format = "0.00"
+    # Corrected class totals (subtract excess from larger)
+    ws.cell(row=row, column=8).value = f"={raw_eq_cell}-IF({raw_eq_cell}>={raw_bd_cell},MAX({raw_eq_cell}+{raw_bd_cell}-100,0),0)"
+    ws.cell(row=row, column=8).font = PARAM_FONT
+    ws.cell(row=row, column=8).number_format = "0.00"
+    ws.cell(row=row, column=8).alignment = Alignment(horizontal="center")
+    ws.cell(row=row, column=9).value = f"={raw_bd_cell}-IF({raw_bd_cell}>{raw_eq_cell},MAX({raw_eq_cell}+{raw_bd_cell}-100,0),0)"
+    ws.cell(row=row, column=9).font = PARAM_FONT
+    ws.cell(row=row, column=9).number_format = "0.00"
+    ws.cell(row=row, column=9).alignment = Alignment(horizontal="center")
+    step1_row = row
+    row += 1
+
+    headers = ["자산", "지역", "V.SAA(%)", "Tilt Ratio", "V.Raw", "TAA(%)", "vs SAA", "Low(%)", "High(%)"]
     write_header_row(ws, row, headers, start_col=2)
     row += 1
 
@@ -593,7 +461,10 @@ def build_vintage_section(ws, start_row, vintage_name, equity_pct, bond_pct, saa
         vintage_assets.append((asset, region, v_saa))
 
     data_start_row = row
-    raw_col_letter = get_column_letter(10) if raw_col == "J" else get_column_letter(13)  # just use the passed col
+
+    # SUMIF ranges for per-class normalization
+    v_b_range = f"$B${data_start_row}:$B${data_start_row + N - 1}"
+    v_raw_range = f"$F${data_start_row}:$F${data_start_row + N - 1}"
 
     for i, (asset, region, v_saa) in enumerate(vintage_assets):
         r = row + i
@@ -611,26 +482,29 @@ def build_vintage_section(ws, start_row, vintage_name, equity_pct, bond_pct, saa
         ws.cell(row=r, column=5).value = f'=IF({saa_col}{cr}>=0.5,({raw_col}{cr}-{saa_col}{cr})/{saa_col}{cr},{raw_col}{cr}-{saa_col}{cr})'
         ws.cell(row=r, column=5).number_format = "+0.00;-0.00;0.00"
 
-        # Vintage Raw = IF(SAA_2050>=0.5, V_SAA*(1+TiltRatio), V_SAA+TiltRatio), floored at 1.0
-        ws.cell(row=r, column=6).value = f'=MAX(IF({saa_col}{cr}>=0.5,D{r}*(1+E{r}),D{r}+E{r}),1.0)'
+        # Vintage Raw = MAX(IF(...), 0)
+        ws.cell(row=r, column=6).value = f'=MAX(IF({saa_col}{cr}>=0.5,D{r}*(1+E{r}),D{r}+E{r}),0)'
         ws.cell(row=r, column=6).number_format = "0.00"
 
-        # Final(%) = V_Raw / SUM(V_Raw) * 100
-        raw_range = f"F{data_start_row}:F{data_start_row + N - 1}"
-        ws.cell(row=r, column=7).value = f"=ROUND(F{r}/SUM({raw_range})*100,2)"
+        # TAA(%) = per-class normalization (class_total=0이면 0)
+        v_class_ref = f'IF(B{r}="주식",{eq_class_cell},{bd_class_cell})'
+        ws.cell(row=r, column=7).value = (
+            f"=IF({v_class_ref}=0,0,"
+            f"F{r}/SUMIF({v_b_range},B{r},{v_raw_range})*{v_class_ref})"
+        )
         ws.cell(row=r, column=7).number_format = "0.00"
         ws.cell(row=r, column=7).fill = RESULT_FILL
         ws.cell(row=r, column=7).font = Font(name="맑은 고딕", size=10, bold=True)
 
-        # vs SAA = Final - V_SAA
-        ws.cell(row=r, column=8).value = f"=ROUND(G{r}-D{r},2)"
+        # vs SAA = TAA - V_SAA
+        ws.cell(row=r, column=8).value = f"=G{r}-D{r}"
         ws.cell(row=r, column=8).number_format = "+0.00;-0.00;0.00"
 
         # Half Width → Low, High
-        ws.cell(row=r, column=9).value = f"=ROUND(MAX(G{r}-IF(G{r}>=20,7.5,IF(G{r}>=10,5.0,2.5)),0),2)"
+        ws.cell(row=r, column=9).value = f"=MAX(G{r}-IF(G{r}>=20,7.5,IF(G{r}>=10,5.0,2.5)),0)"
         ws.cell(row=r, column=9).number_format = "0.00"
 
-        ws.cell(row=r, column=10).value = f"=ROUND(G{r}+IF(G{r}>=20,7.5,IF(G{r}>=10,5.0,2.5)),2)"
+        ws.cell(row=r, column=10).value = f"=G{r}+IF(G{r}>=20,7.5,IF(G{r}>=10,5.0,2.5))"
         ws.cell(row=r, column=10).number_format = "0.00"
 
         for col in range(2, 11):
@@ -656,8 +530,7 @@ def build_vintage_section(ws, start_row, vintage_name, equity_pct, bond_pct, saa
 
 def main():
     wb = openpyxl.Workbook()
-    build_peer_sheet(wb)
-    build_weighted_sheet(wb)
+    build_sheet(wb)
 
     output_path = "/home/byoun/projects/taa-dashboard/TAA_Dashboard.xlsx"
     wb.save(output_path)
