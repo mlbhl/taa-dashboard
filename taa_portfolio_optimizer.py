@@ -75,30 +75,31 @@ def _two_level_allocation(df: pd.DataFrame, class_signals: dict, alpha: float,
     else:
         df["Signal_Class"] = 0.0
 
-    # ── Step 1: 자산군 간 비중 결정 ──
-    asset_classes = df["자산"].unique() if "자산" in df.columns else ["전체"]
+    # ── Step 1: 자산군 간 비중 결정 (SAA 기준, 점수차 × 2.5%p) ──
+    asset_classes = df["자산"].unique().tolist() if "자산" in df.columns else ["전체"]
     class_saa_totals = {}
-    class_peer_totals = {}
     for ac in asset_classes:
         mask = df["자산"] == ac if "자산" in df.columns else pd.Series(True, index=df.index)
         class_saa_totals[ac] = df.loc[mask, "SAA"].sum()
-        class_peer_totals[ac] = df.loc[mask, "Peer"].sum()
 
-    # 자산군별 target 비중 산출 (class signal 기반)
-    class_targets = {}
-    for ac in asset_classes:
-        cs = class_signals.get(ac, 0)
-        saa_total = class_saa_totals[ac]
-        peer_total = class_peer_totals[ac]
-        # class signal로 자산군 비중 조정: Peer 기준 ± alpha * signal * tilt
-        gap = saa_total - peer_total
-        tilt = max(abs(gap), peer_total * 0.10)  # 최소 tilt = peer의 10%
-        adj = alpha * cs * tilt
-        class_targets[ac] = max(peer_total + adj, 1.0)
+    # 주식/채권 2자산군: shift = (주식점수 - 채권점수) × 2.5%p
+    SHIFT_PER_POINT = 2.5
+    if len(asset_classes) == 2:
+        ac_a, ac_b = asset_classes[0], asset_classes[1]
+        score_diff = class_signals.get(ac_a, 0) - class_signals.get(ac_b, 0)
+        shift = score_diff * SHIFT_PER_POINT
+        class_final = {
+            ac_a: max(class_saa_totals[ac_a] + shift, 1.0),
+            ac_b: max(class_saa_totals[ac_b] - shift, 1.0),
+        }
+    else:
+        # 단일 자산군이면 100% 그대로
+        class_final = {ac: class_saa_totals[ac] for ac in asset_classes}
 
-    # 자산군 비중 정규화 (합계 = 100)
-    total_target = sum(class_targets.values())
-    class_final = {ac: v / total_target * 100 for ac, v in class_targets.items()}
+    # 합계 보정 (floor 적용 시 100% 초과/미달 가능)
+    total_cf = sum(class_final.values())
+    if abs(total_cf - 100.0) > 0.01:
+        class_final = {ac: v / total_cf * 100 for ac, v in class_final.items()}
 
     # ── Step 2: 자산군 내 지역 배분 ──
     results = []
@@ -1212,7 +1213,7 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
     # ── 5) Formula ──
     two_level_desc = [
         html.Div([html.Span("[ 2단계 배분 ]", style={"color": ACCENT, "fontWeight": "700"})]),
-        html.Div([html.Span("Step 1. ", style={"color": ACCENT}), "자산군 시그널 → 주식/채권 총비중 결정 (Peer 기준, α 적용)"]),
+        html.Div([html.Span("Step 1. ", style={"color": ACCENT}), "자산군 비중 = SAA ± (주식점수 − 채권점수) × 2.5%p"]),
         html.Div([html.Span("Step 2. ", style={"color": ACCENT}), "개별 시그널 → 자산군 내 지역 배분 후 총비중에 곱함"]),
         html.Div([html.Span("   ", style={"color": ACCENT}), "  TAA 수치: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2"]),
         html.Div("", style={"marginTop": "4px"}),
