@@ -123,12 +123,13 @@ pdf.bullet("w = 0.5: Base = (SAA + Peer) / 2 (균등 평균)")
 pdf.bullet("w = 1.0: Base = SAA (SAA만 반영)")
 pdf.ln(1)
 
-pdf.sub_title("Step 4. Tilt 계산 (Base 비례)")
-pdf.mono("  Tilt_i = Base_i * TiltRate")
+pdf.sub_title("Step 4. Tilt 계산 (감쇠 비례)")
+pdf.mono("  Tilt_i = (Base_i / avg_Base)^p * avg_Base * TiltRate")
 pdf.ln(1)
 pdf.body(
-    "Base에 비례하여 Tilt가 결정됩니다. "
-    "비중이 큰 자산은 조정 여지가 크고, 작은 자산은 조정이 작습니다."
+    "avg_Base는 자산군 내 Base 평균입니다. "
+    "p=1이면 기존 Base 비례, p=0이면 균등 Tilt, p=0.5(기본값)이면 감쇠 비례입니다. "
+    "대형 자산의 과도한 Tilt를 억제하고 소형 자산의 시그널 반영력을 높입니다."
 )
 pdf.ln(1)
 
@@ -188,8 +189,15 @@ pdf.ln(1)
 pdf.sub_title("Tilt Rate")
 pdf.bullet("범위: 0% ~ 50% (슬라이더로 조정)")
 pdf.bullet("기본값: 20%")
-pdf.bullet("Tilt = Base × TiltRate")
-pdf.bullet("비중이 큰 자산일수록 Tilt가 커져 조정 여지가 확대됨")
+pdf.bullet("Tilt = (Base / avg_Base)^p × avg_Base × TiltRate")
+pdf.ln(1)
+
+pdf.sub_title("Tilt Power (p)")
+pdf.bullet("범위: 0.0 ~ 1.0 (슬라이더로 조정)")
+pdf.bullet("기본값: 0.5")
+pdf.bullet("p=1: Base 비례 (대형 자산 Tilt 큼)")
+pdf.bullet("p=0.5: 감쇠 비례 (Tilt 격차 압축)")
+pdf.bullet("p=0: 균등 Tilt (모든 자산 동일)")
 pdf.ln(1)
 
 pdf.sub_title("비음수 조건")

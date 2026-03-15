@@ -6,7 +6,7 @@ TAA Dashboard
 Step 1: 자산군 시그널 → 주식/채권 총비중 (SAA 기준, 점수차 × 2.5%p)
 Step 2: 개별 시그널 → Base 비례 Tilt로 자산군 내 배분
     Base_i = w × SAA_i + (1-w) × Peer_i
-    Tilt_i = Base_i × tilt_rate
+    Tilt_i = (Base_i / avg_Base)^p × avg_Base × tilt_rate
     TAA_i = normalize( Base_i + α × Signal_i × Tilt_i )
 
 Requirements:
@@ -58,11 +58,11 @@ VIEW_MAP = {"Strong OW": 2, "Overweight": 1, "Neutral": 0, "Underweight": -1, "S
 REGION_COLORS = ["#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#10b981", "#f97316", "#8b5cf6", "#14b8a6"]
 
 
-def compute_taa(df: pd.DataFrame, alpha: float, saa_weight: float = 0.5, tilt_rate: float = 0.20, class_signals: dict = None) -> pd.DataFrame:
+def compute_taa(df: pd.DataFrame, alpha: float, saa_weight: float = 0.5, tilt_rate: float = 0.20, class_signals: dict = None, tilt_power: float = 0.5) -> pd.DataFrame:
     """2단계 배분: 자산군 비중 → 자산군 내 지역 배분
 
     Step 1: 자산군 시그널로 자산군 간 비중 조정 (SAA 기준, 점수차 × 2.5%p)
-    Step 2: 개별 시그널로 Base 비례 Tilt → 자산군 내 지역 배분
+    Step 2: 개별 시그널로 감쇠 비례 Tilt → 자산군 내 지역 배분
     TAA = 자산군 비중 × 자산군 내 비율
     """
     if class_signals is None:
@@ -108,7 +108,11 @@ def compute_taa(df: pd.DataFrame, alpha: float, saa_weight: float = 0.5, tilt_ra
         sub = df.loc[mask].copy()
 
         sub["Base"] = saa_weight * sub["SAA"] + (1 - saa_weight) * sub["Peer"]
-        sub["Tilt"] = sub["Base"] * tilt_rate
+        avg_base = sub["Base"].mean()
+        if avg_base > 0:
+            sub["Tilt"] = (sub["Base"] / avg_base) ** tilt_power * avg_base * tilt_rate
+        else:
+            sub["Tilt"] = 0.0
         sub["Adj"] = alpha * sub["Signal_Asset"] * sub["Tilt"]
         sub["Raw"] = (sub["Base"] + sub["Adj"]).clip(lower=0)
 
@@ -280,8 +284,6 @@ app.index_string = '''<!DOCTYPE html>
     box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
 }
 
-
-
 /* 편집 가능 셀 힌트 */
 .dash-cell.cell--editable {
     cursor: pointer;
@@ -363,7 +365,7 @@ app.layout = html.Div(
                 # ── Parameters ──
                 html.Div(style=card_style, children=[
                     html.Div("Parameters", style=label_style),
-                    html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr 1fr", "gap": "24px", "alignItems": "start"}, children=[
+                    html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr 1fr 1fr", "gap": "20px", "alignItems": "start"}, children=[
                         # Alpha slider
                         html.Div([
                             html.Div(style={"display": "flex", "justifyContent": "space-between", "marginBottom": "4px"}, children=[
@@ -413,6 +415,23 @@ app.layout = html.Div(
                             ),
                             html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px", "color": "#94a3b8"}, children=[
                                 html.Span("조정 없음"), html.Span("Base의 50%"),
+                            ]),
+                        ]),
+                        # Tilt Power (p)
+                        html.Div([
+                            html.Div(style={"display": "flex", "justifyContent": "space-between", "marginBottom": "4px"}, children=[
+                                html.Span("Tilt Power (p)", style={"fontSize": "15px", "color": "#475569"}),
+                                html.Span(id="tiltpower-display", style={"fontSize": "18px", "fontWeight": "600", "fontFamily": "monospace", "color": ACCENT}),
+                            ]),
+                            dcc.Slider(
+                                id="tiltpower-slider", min=0, max=1, step=0.1, value=0.5,
+                                marks={0: {"label": "0.0", "style": {"color": TEXT_DIM, "fontSize": "12px"}},
+                                       0.5: {"label": "0.5", "style": {"color": TEXT_DIM, "fontSize": "12px"}},
+                                       1: {"label": "1.0", "style": {"color": TEXT_DIM, "fontSize": "12px"}}},
+                                tooltip={"placement": "bottom", "always_visible": False},
+                            ),
+                            html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px", "color": "#94a3b8"}, children=[
+                                html.Span("균등 Tilt"), html.Span("비례 Tilt"),
                             ]),
                         ]),
                     ]),
@@ -686,10 +705,11 @@ def add_vintage_row(n_clicks, rows):
      Input("alpha-slider", "value"),
      Input("w-slider", "value"),
      Input("tiltrate-slider", "value"),
+     Input("tiltpower-slider", "value"),
      Input("class-signal-table", "data"),
      Input("vintage-table", "data")],
 )
-def update_vintage_results(rows, alpha, saa_weight, tilt_rate, class_rows, vintage_rows):
+def update_vintage_results(rows, alpha, saa_weight, tilt_rate, tilt_power, class_rows, vintage_rows):
     if not rows or not vintage_rows:
         return html.Div("데이터를 입력하세요.", style={"color": TEXT_DIM}), ""
 
@@ -704,7 +724,7 @@ def update_vintage_results(rows, alpha, saa_weight, tilt_rate, class_rows, vinta
         for r in class_rows:
             class_signals[r["자산군"]] = VIEW_MAP.get(r.get("View", "Neutral"), 0)
 
-    result_2050 = compute_taa(df, alpha, saa_weight, tilt_rate, class_signals)
+    result_2050 = compute_taa(df, alpha, saa_weight, tilt_rate, class_signals, tilt_power)
 
     # Process each vintage
     vintage_sections = []
@@ -780,6 +800,10 @@ def update_w_display(val):
 def update_tiltrate_display(val):
     return f"{val:.0%}"
 
+@app.callback(Output("tiltpower-display", "children"), Input("tiltpower-slider", "value"))
+def update_tiltpower_display(val):
+    return f"{val:.1f}"
+
 
 # ── Range Table 렌더링 (입력 변경 시 디폴트 범위 재생성) ──
 @app.callback(
@@ -793,10 +817,11 @@ def update_tiltrate_display(val):
         Input("alpha-slider", "value"),
         Input("w-slider", "value"),
         Input("tiltrate-slider", "value"),
+        Input("tiltpower-slider", "value"),
         Input("class-signal-table", "data"),
     ],
 )
-def update_range_table(rows, alpha, saa_weight, tilt_rate, class_rows):
+def update_range_table(rows, alpha, saa_weight, tilt_rate, tilt_power, class_rows):
     if not rows:
         return html.Div("데이터를 입력하세요.", style={"color": TEXT_DIM}), None, ""
 
@@ -810,7 +835,7 @@ def update_range_table(rows, alpha, saa_weight, tilt_rate, class_rows):
         for r in class_rows:
             class_signals[r["자산군"]] = VIEW_MAP.get(r.get("View", "Neutral"), 0)
 
-    result = compute_taa(df, alpha, saa_weight, tilt_rate, class_signals)
+    result = compute_taa(df, alpha, saa_weight, tilt_rate, class_signals, tilt_power)
     if "자산" in result.columns:
         result["Label"] = result["자산"] + " " + result["지역"]
     else:
@@ -889,10 +914,11 @@ def confirm_range(n_clicks, range_data):
         Input("confirmed-range-store", "data"),
         Input("w-slider", "value"),
         Input("tiltrate-slider", "value"),
+        Input("tiltpower-slider", "value"),
         Input("class-signal-table", "data"),
     ],
 )
-def update_results(rows, alpha, confirmed_range, saa_weight, tilt_rate, class_rows):
+def update_results(rows, alpha, confirmed_range, saa_weight, tilt_rate, tilt_power, class_rows):
     if not rows:
         empty = html.Div("데이터를 입력하세요.", style={"color": TEXT_DIM})
         return empty, go.Figure(), empty, empty, ""
@@ -907,7 +933,7 @@ def update_results(rows, alpha, confirmed_range, saa_weight, tilt_rate, class_ro
         for r in class_rows:
             class_signals[r["자산군"]] = VIEW_MAP.get(r.get("View", "Neutral"), 0)
 
-    result = compute_taa(df, alpha, saa_weight, tilt_rate, class_signals)
+    result = compute_taa(df, alpha, saa_weight, tilt_rate, class_signals, tilt_power)
     # 자산+지역 라벨 (차트/카드 표시용)
     if "자산" in result.columns:
         result["Label"] = result["자산"] + " " + result["지역"]
@@ -1129,7 +1155,7 @@ def update_results(rows, alpha, confirmed_range, saa_weight, tilt_rate, class_ro
 
     formula = two_level_desc + [
         html.Div([html.Span("1. ", style={"color": ACCENT}), f"Base_i = {saa_weight:.2f} × SAA_i + {1 - saa_weight:.2f} × Peer_i"]),
-        html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = Base_i × {tilt_rate:.0%}"]),
+        html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = (Base_i / avg_Base)^{tilt_power:.1f} × avg_Base × {tilt_rate:.0%}"]),
         html.Div([html.Span("3. ", style={"color": ACCENT}), "Adj_i = α × Asset_Signal_i × Tilt_i"]),
         html.Div([html.Span("4. ", style={"color": ACCENT}), "Raw_i = Base_i + Adj_i"]),
         html.Div([html.Span("5. ", style={"color": ACCENT}), "TAA = 자산군비중 × (Raw_i / Σ Raw_within_class)"]),
@@ -1142,7 +1168,7 @@ def update_results(rows, alpha, confirmed_range, saa_weight, tilt_rate, class_ro
         html.Div([html.Span("   ", style={"color": ACCENT}), "  V_Raw_i = V_SAA_i × (1 + tilt_ratio_i)"]),
         html.Div([html.Span("   ", style={"color": ACCENT}), "  V_TAA = 빈티지자산군비중 × (V_Raw_i / Σ V_Raw_within_class)"]),
         html.Div(
-            f"α = {alpha:.2f} | SAA Weight = {saa_weight:.2f} | Tilt Rate = {tilt_rate:.0%}",
+            f"α = {alpha:.2f} | SAA Weight = {saa_weight:.2f} | Tilt Rate = {tilt_rate:.0%} | Tilt Power = {tilt_power:.1f}",
             style={"marginTop": "8px", "fontSize": "13px", "color": "#94a3b8"},
         ),
     ]

@@ -88,6 +88,7 @@ def build_sheet(wb):
         ("B4", "α (확신도)", "C4", 0.50),
         ("B5", "SAA 가중치 (w)", "C5", 0.50),
         ("B6", "Tilt Rate", "C6", 0.20),
+        ("B7", "Tilt Power (p)", "C7", 0.50),
     ]
     for label_cell, label, val_cell, val in params:
         ws[label_cell] = label
@@ -105,6 +106,8 @@ def build_sheet(wb):
     ws["E5"].font = DIM_FONT
     ws["E6"] = "← Base 대비 Tilt 비율"
     ws["E6"].font = DIM_FONT
+    ws["E7"] = "← 0=균등, 0.5=감쇠, 1=비례"
+    ws["E7"].font = DIM_FONT
 
     # ── TAA Signal 매핑 참조 (H4:I8 → VLOOKUP 범위) ──
     ws["H3"] = "View Signal 매핑"
@@ -236,10 +239,12 @@ def build_sheet(wb):
     alpha_ref = "$C$4"
     w_ref = "$C$5"
     tilt_rate_ref = "$C$6"
+    tilt_power_ref = "$C$7"
 
     # Raw range refs for per-class SUMIF
     calc_b_range = f"$B${CALC_START+1}:$B${CALC_START+N}"  # 자산 column
     calc_raw_range = f"$J${CALC_START+1}:$J${CALC_START+N}"  # Raw column
+    calc_base_range = f"$G${CALC_START+1}:$G${CALC_START+N}"  # Base column (for avg)
 
     for i in range(N):
         r = CALC_START + 1 + i
@@ -266,8 +271,9 @@ def build_sheet(wb):
         ws.cell(row=r, column=7).value = f"={w_ref}*D{r}+(1-{w_ref})*E{r}"
         ws.cell(row=r, column=7).number_format = "0.00"
 
-        # Tilt = Base * tilt_rate
-        ws.cell(row=r, column=8).value = f"=G{r}*{tilt_rate_ref}"
+        # Tilt = (Base / avg_Base)^p * avg_Base * tilt_rate
+        avg_base_formula = f"SUMIF({calc_b_range},B{r},{calc_base_range})/COUNTIF({calc_b_range},B{r})"
+        ws.cell(row=r, column=8).value = f"=(G{r}/({avg_base_formula}))^{tilt_power_ref}*({avg_base_formula})*{tilt_rate_ref}"
         ws.cell(row=r, column=8).number_format = "0.00"
 
         # Adj = α * Signal * Tilt
@@ -385,7 +391,7 @@ def build_sheet(wb):
         "[ Step 2 ] 자산군 내 배분",
         "  1. Signal_i = View → 수치 (SOW=+2, OW=+1, N=0, UW=-1, SUW=-2)",
         "  2. Base_i = w × SAA_i + (1-w) × Peer_i",
-        "  3. Tilt_i = Base_i × Tilt Rate",
+        "  3. Tilt_i = (Base_i / avg_Base)^p × avg_Base × Tilt Rate",
         "  4. Adj_i = α × Signal_i × Tilt_i",
         "  5. Raw_i = MAX( Base_i + Adj_i,  0 )",
         "  6. TAA_i = Raw_i / Σ(같은자산군 Raw) × 자산군비중",
