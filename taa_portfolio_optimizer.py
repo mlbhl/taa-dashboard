@@ -60,81 +60,119 @@ TAA_MAP = {"Strong OW": 2, "Overweight": 1, "Neutral": 0, "Underweight": -1, "St
 REGION_COLORS = ["#6366f1", "#f59e0b", "#ec4899", "#06b6d4", "#10b981", "#f97316", "#8b5cf6", "#14b8a6"]
 
 
-def _apply_class_signals(df: pd.DataFrame, class_signals: dict) -> pd.DataFrame:
-    """자산군 시그널을 개별 자산 시그널에 합산 (클램프 ±2)"""
-    individual = df["TAA"].map(TAA_MAP).fillna(0).astype(float)
-    class_adj = df["자산"].map(class_signals).fillna(0).astype(float) if "자산" in df.columns else 0
-    df["Signal_Class"] = class_adj if isinstance(class_adj, (int, float)) else class_adj
-    df["Signal_Asset"] = individual
-    df["Signal"] = (individual + class_adj).clip(-2, 2)
-    return df
+def _two_level_allocation(df: pd.DataFrame, class_signals: dict, alpha: float,
+                          calc_within_fn) -> pd.DataFrame:
+    """2단계 배분: 자산군 비중 → 자산군 내 지역 배분
+
+    Step 1: 자산군 시그널로 자산군 간 비중 조정 (주식 vs 채권)
+    Step 2: 개별 시그널로 자산군 내 지역 비중 조정 (미국 vs 유럽 ...)
+    Final = 자산군 비중 × 자산군 내 비율
+    """
+    df = df.copy()
+    df["Signal_Asset"] = df["TAA"].map(TAA_MAP).fillna(0).astype(float)
+    if "자산" in df.columns:
+        df["Signal_Class"] = df["자산"].map(class_signals).fillna(0).astype(float)
+    else:
+        df["Signal_Class"] = 0.0
+
+    # ── Step 1: 자산군 간 비중 결정 ──
+    asset_classes = df["자산"].unique() if "자산" in df.columns else ["전체"]
+    class_saa_totals = {}
+    class_peer_totals = {}
+    for ac in asset_classes:
+        mask = df["자산"] == ac if "자산" in df.columns else pd.Series(True, index=df.index)
+        class_saa_totals[ac] = df.loc[mask, "SAA"].sum()
+        class_peer_totals[ac] = df.loc[mask, "Peer"].sum()
+
+    # 자산군별 target 비중 산출 (class signal 기반)
+    class_targets = {}
+    for ac in asset_classes:
+        cs = class_signals.get(ac, 0)
+        saa_total = class_saa_totals[ac]
+        peer_total = class_peer_totals[ac]
+        # class signal로 자산군 비중 조정: Peer 기준 ± alpha * signal * tilt
+        gap = saa_total - peer_total
+        tilt = max(abs(gap), peer_total * 0.10)  # 최소 tilt = peer의 10%
+        adj = alpha * cs * tilt
+        class_targets[ac] = max(peer_total + adj, 1.0)
+
+    # 자산군 비중 정규화 (합계 = 100)
+    total_target = sum(class_targets.values())
+    class_final = {ac: v / total_target * 100 for ac, v in class_targets.items()}
+
+    # ── Step 2: 자산군 내 지역 배분 ──
+    results = []
+    for ac in asset_classes:
+        mask = df["자산"] == ac if "자산" in df.columns else pd.Series(True, index=df.index)
+        sub = df.loc[mask].copy()
+
+        # 자산군 내 개별 시그널로 배분 (calc_within_fn이 Raw를 계산)
+        sub = calc_within_fn(sub, alpha)
+
+        # 자산군 내 정규화: Raw → 비율 → 자산군 비중 곱하기
+        raw_total = sub["Raw"].sum()
+        sub["Final"] = (sub["Raw"] / raw_total * class_final[ac]).round(2)
+        results.append(sub)
+
+    result = pd.concat(results, ignore_index=True)
+
+    # Final 합계를 정확히 100%로 보정 (반올림 오차)
+    rounding_err = 100.0 - result["Final"].sum()
+    if abs(rounding_err) > 0.001:
+        idx_max = result["Final"].idxmax()
+        result.at[idx_max, "Final"] = round(result.at[idx_max, "Final"] + rounding_err, 2)
+
+    result["vs_Peer"] = (result["Final"] - result["Peer"]).round(2)
+    result["vs_SAA"] = (result["Final"] - result["SAA"]).round(2)
+
+    half_w = result["Final"].apply(lambda v: 7.5 if v >= 20 else 5.0 if v >= 10 else 2.5)
+    result["Final_Low"] = (result["Final"] - half_w).clip(lower=0.0).round(2)
+    result["Final_High"] = (result["Final"] + half_w).round(2)
+
+    return result
 
 
 def compute_final(df: pd.DataFrame, alpha: float, damping_opposed: float = 0.25, min_tilt_rate: float = 0.20, class_signals: dict = None) -> pd.DataFrame:
-    """Final 비중 계산 후 정규화
+    """Peer 기준 2단계 배분
 
-    비대칭 Tilt: Signal 방향이 SAA 쪽이면 적극적(×1.0),
-    SAA 반대 쪽이면 억제(×damping_opposed)하여 SAA 앵커 효과를 구현.
-    min_tilt_rate: gap=0일 때만 Tilt = Peer × min_tilt_rate 적용.
+    Step 1: 자산군 시그널 → 주식/채권 총비중
+    Step 2: 개별 시그널 → Peer 기준 비대칭 Tilt로 자산군 내 배분
     """
-    df = df.copy()
     if class_signals is None:
         class_signals = {}
-    df = _apply_class_signals(df, class_signals)
 
-    gap = df["SAA"] - df["Peer"]
-    aligned = df["Signal"] * gap >= 0          # Signal이 SAA 쪽으로 향하는가
-    damping = aligned * (1.0 - damping_opposed) + damping_opposed
-    min_tilt = df["Peer"] * min_tilt_rate
-    df["Tilt"] = (gap.abs() * damping).where(gap != 0, min_tilt)
+    def calc_within(sub, alpha_):
+        """자산군 내 Peer 기준 비대칭 Tilt"""
+        gap = sub["SAA"] - sub["Peer"]
+        aligned = sub["Signal_Asset"] * gap >= 0
+        damp = aligned * (1.0 - damping_opposed) + damping_opposed
+        min_tilt = sub["Peer"] * min_tilt_rate
+        sub["Tilt"] = (gap.abs() * damp).where(gap != 0, min_tilt)
+        sub["Adj"] = alpha_ * sub["Signal_Asset"] * sub["Tilt"]
+        sub["Raw"] = (sub["Peer"] + sub["Adj"]).clip(lower=0.5)
+        return sub
 
-    df["Adj"] = alpha * df["Signal"] * df["Tilt"]
-    df["Raw"] = df["Peer"] + df["Adj"]
-    df["Raw"] = df["Raw"].clip(lower=1.0)  # floor
-
-    total = df["Raw"].sum()
-    df["Final"] = (df["Raw"] / total * 100).round(2)
-    df["vs_Peer"] = (df["Final"] - df["Peer"]).round(2)
-    df["vs_SAA"] = (df["Final"] - df["SAA"]).round(2)
-
-    # 디폴트 범위: Final ≥ 20% → ±7.5%p, ≥ 10% → ±5%p, < 10% → ±2.5%p (비음수)
-    half_w = df["Final"].apply(lambda v: 7.5 if v >= 20 else 5.0 if v >= 10 else 2.5)
-    df["Final_Low"] = (df["Final"] - half_w).clip(lower=0.0).round(2)
-    df["Final_High"] = (df["Final"] + half_w).round(2)
-
-    return df
+    return _two_level_allocation(df, class_signals, alpha, calc_within)
 
 
 def compute_final_weighted(df: pd.DataFrame, alpha: float, saa_weight: float = 0.5, tilt_rate: float = 0.20, class_signals: dict = None) -> pd.DataFrame:
-    """가중 평균 기준 Final 비중 계산
+    """가중 평균 기준 2단계 배분
 
-    Base_i = w × SAA_i + (1-w) × Peer_i
-    Tilt_i = Base_i × tilt_rate
-    Adj_i = α × Signal_i × Tilt_i
-    Final = normalize(Base + Adj)
+    Step 1: 자산군 시그널 → 주식/채권 총비중
+    Step 2: 개별 시그널 → Base 비례 Tilt로 자산군 내 배분
     """
-    df = df.copy()
     if class_signals is None:
         class_signals = {}
-    df = _apply_class_signals(df, class_signals)
 
-    df["Base"] = saa_weight * df["SAA"] + (1 - saa_weight) * df["Peer"]
-    df["Tilt"] = df["Base"] * tilt_rate
+    def calc_within(sub, alpha_):
+        """자산군 내 Base 비례 Tilt"""
+        sub["Base"] = saa_weight * sub["SAA"] + (1 - saa_weight) * sub["Peer"]
+        sub["Tilt"] = sub["Base"] * tilt_rate
+        sub["Adj"] = alpha_ * sub["Signal_Asset"] * sub["Tilt"]
+        sub["Raw"] = (sub["Base"] + sub["Adj"]).clip(lower=0.5)
+        return sub
 
-    df["Adj"] = alpha * df["Signal"] * df["Tilt"]
-    df["Raw"] = df["Base"] + df["Adj"]
-    df["Raw"] = df["Raw"].clip(lower=1.0)
-
-    total = df["Raw"].sum()
-    df["Final"] = (df["Raw"] / total * 100).round(2)
-    df["vs_Peer"] = (df["Final"] - df["Peer"]).round(2)
-    df["vs_SAA"] = (df["Final"] - df["SAA"]).round(2)
-
-    half_w = df["Final"].apply(lambda v: 7.5 if v >= 20 else 5.0 if v >= 10 else 2.5)
-    df["Final_Low"] = (df["Final"] - half_w).clip(lower=0.0).round(2)
-    df["Final_High"] = (df["Final"] + half_w).round(2)
-
-    return df
+    return _two_level_allocation(df, class_signals, alpha, calc_within)
 
 
 def derive_vintage_saa(equity_pct: float, bond_pct: float) -> list[dict]:
@@ -1140,7 +1178,7 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
     num_cols = ["SAA", "Peer"]
     if mode == "weighted" and "Base" in result.columns:
         num_cols.append("Base")
-    signal_cols = ["TAA", "Signal_Class", "Signal_Asset", "Signal"]
+    signal_cols = ["TAA", "Signal_Class", "Signal_Asset"]
     rest_cols = ["Tilt", "Adj", "Raw", "Final", "Final_Low", "Final_High", "vs_Peer", "vs_SAA"]
     detail_cols = base_cols + num_cols + signal_cols + rest_cols
     detail_cols = [c for c in detail_cols if c in result.columns]
@@ -1172,33 +1210,37 @@ def update_results(rows, alpha, damping_opposed, min_tilt_rate, confirmed_range,
     )
 
     # ── 5) Formula ──
+    two_level_desc = [
+        html.Div([html.Span("[ 2단계 배분 ]", style={"color": ACCENT, "fontWeight": "700"})]),
+        html.Div([html.Span("Step 1. ", style={"color": ACCENT}), "자산군 시그널 → 주식/채권 총비중 결정 (Peer 기준, α 적용)"]),
+        html.Div([html.Span("Step 2. ", style={"color": ACCENT}), "개별 시그널 → 자산군 내 지역 배분 후 총비중에 곱함"]),
+        html.Div([html.Span("   ", style={"color": ACCENT}), "  TAA 수치: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2"]),
+        html.Div("", style={"marginTop": "4px"}),
+    ]
+
     if mode == "peer":
-        formula = [
-            html.Div([html.Span("1. ", style={"color": ACCENT}), "Signal_i = clamp( Class_Signal + Asset_Signal, −2, +2 )"]),
-            html.Div([html.Span("   ", style={"color": ACCENT}), "  TAA 수치 변환: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2"]),
-            html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = |SAA_i − Peer_i| × d_i  (gap=0이면 Peer_i × {min_tilt_rate:.0%})"]),
-            html.Div([html.Span("   ", style={"color": ACCENT}), f"d_i = 1.0 (Signal이 SAA 방향)  /  {damping_opposed:.2f} (Signal이 SAA 반대 방향)"]),
-            html.Div([html.Span("3. ", style={"color": ACCENT}), "Adj_i = α × Signal_i × Tilt_i"]),
-            html.Div([html.Span("4. ", style={"color": ACCENT}), "Raw_i = max( Peer_i + Adj_i,  1.0 )"]),
-            html.Div([html.Span("5. ", style={"color": ACCENT}), "Final_i = Raw_i / Σ Raw_j × 100"]),
-            html.Div([html.Span("6. ", style={"color": ACCENT}), "Range: Final ≥ 20% → ±7.5%p,  ≥ 10% → ±5%p,  < 10% → ±2.5%p  (수기 조정 가능)"]),
+        formula = two_level_desc + [
+            html.Div([html.Span("1. ", style={"color": ACCENT}), f"Tilt_i = |SAA_i − Peer_i| × d_i  (gap=0이면 Peer_i × {min_tilt_rate:.0%})"]),
+            html.Div([html.Span("   ", style={"color": ACCENT}), f"d_i = 1.0 (aligned)  /  {damping_opposed:.2f} (opposed)"]),
+            html.Div([html.Span("2. ", style={"color": ACCENT}), "Adj_i = α × Asset_Signal_i × Tilt_i"]),
+            html.Div([html.Span("3. ", style={"color": ACCENT}), "Raw_i = Peer_i + Adj_i"]),
+            html.Div([html.Span("4. ", style={"color": ACCENT}), "Final = 자산군비중 × (Raw_i / Σ Raw_within_class)"]),
+            html.Div([html.Span("5. ", style={"color": ACCENT}), "Range: Final ≥ 20% → ±7.5%p,  ≥ 10% → ±5%p,  < 10% → ±2.5%p"]),
             html.Div(
-                f"α = {alpha:.2f} | Damping = {damping_opposed:.2f} | Min Tilt Rate = {min_tilt_rate:.0%} | Floor = 1.0%",
+                f"α = {alpha:.2f} | Damping = {damping_opposed:.2f} | Min Tilt Rate = {min_tilt_rate:.0%}",
                 style={"marginTop": "8px", "fontSize": "13px", "color": "#94a3b8"},
             ),
         ]
     else:
-        formula = [
-            html.Div([html.Span("1. ", style={"color": ACCENT}), "Signal_i = clamp( Class_Signal + Asset_Signal, −2, +2 )"]),
-            html.Div([html.Span("   ", style={"color": ACCENT}), "  TAA 수치 변환: SOW=+2, OW=+1, N=0, UW=−1, SUW=−2"]),
-            html.Div([html.Span("2. ", style={"color": ACCENT}), f"Base_i = {saa_weight:.2f} × SAA_i + {1 - saa_weight:.2f} × Peer_i"]),
-            html.Div([html.Span("3. ", style={"color": ACCENT}), f"Tilt_i = Base_i × {tilt_rate:.0%}"]),
-            html.Div([html.Span("4. ", style={"color": ACCENT}), "Adj_i = α × Signal_i × Tilt_i"]),
-            html.Div([html.Span("5. ", style={"color": ACCENT}), "Raw_i = max( Base_i + Adj_i,  1.0 )"]),
-            html.Div([html.Span("6. ", style={"color": ACCENT}), "Final_i = Raw_i / Σ Raw_j × 100"]),
-            html.Div([html.Span("7. ", style={"color": ACCENT}), "Range: Final ≥ 20% → ±7.5%p,  ≥ 10% → ±5%p,  < 10% → ±2.5%p  (수기 조정 가능)"]),
+        formula = two_level_desc + [
+            html.Div([html.Span("1. ", style={"color": ACCENT}), f"Base_i = {saa_weight:.2f} × SAA_i + {1 - saa_weight:.2f} × Peer_i"]),
+            html.Div([html.Span("2. ", style={"color": ACCENT}), f"Tilt_i = Base_i × {tilt_rate:.0%}"]),
+            html.Div([html.Span("3. ", style={"color": ACCENT}), "Adj_i = α × Asset_Signal_i × Tilt_i"]),
+            html.Div([html.Span("4. ", style={"color": ACCENT}), "Raw_i = Base_i + Adj_i"]),
+            html.Div([html.Span("5. ", style={"color": ACCENT}), "Final = 자산군비중 × (Raw_i / Σ Raw_within_class)"]),
+            html.Div([html.Span("6. ", style={"color": ACCENT}), "Range: Final ≥ 20% → ±7.5%p,  ≥ 10% → ±5%p,  < 10% → ±2.5%p"]),
             html.Div(
-                f"α = {alpha:.2f} | SAA Weight = {saa_weight:.2f} | Tilt Rate = {tilt_rate:.0%} | Floor = 1.0%",
+                f"α = {alpha:.2f} | SAA Weight = {saa_weight:.2f} | Tilt Rate = {tilt_rate:.0%}",
                 style={"marginTop": "8px", "fontSize": "13px", "color": "#94a3b8"},
             ),
         ]
